@@ -54,7 +54,10 @@ impl App {
                     self.surface = Some(surf);
                     self.window = Some(win);
                 }
-                Err(e) => emit(Event::Error { msg: format!("window creation failed: {e}") }),
+                Err(e) => {
+                    emit(Event::Error { msg: format!("window creation failed: {e}") });
+                    event_loop.exit();
+                }
             }
         }
     }
