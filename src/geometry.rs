@@ -22,23 +22,50 @@ pub fn compute_geometry(x_cells: u32, y_cells: u32, w_cells: u32, h_cells: u32) 
 }
 
 /// Return (cell_pixel_width, cell_pixel_height) from the terminal.
+///
+/// When launched by Neovim via jobstart(), stdin/stdout are pipes so TIOCGWINSZ
+/// fails on the standard fds. Fall back to /dev/tty (the controlling terminal),
+/// which is always reachable regardless of how stdio is redirected.
 pub fn cell_pixel_size() -> Result<(u32, u32), String> {
     unsafe {
         let mut ws: libc::winsize = std::mem::zeroed();
-        let ret = libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut ws);
-        if ret != 0 {
-            return Err("ioctl TIOCGWINSZ failed".into());
+
+        // Try standard fds first (works when invoked directly from a terminal).
+        for &fd in &[libc::STDOUT_FILENO, libc::STDIN_FILENO, libc::STDERR_FILENO] {
+            if libc::ioctl(fd, libc::TIOCGWINSZ, &mut ws) == 0
+                && ws.ws_col != 0
+                && ws.ws_row != 0
+                && ws.ws_xpixel != 0
+                && ws.ws_ypixel != 0
+            {
+                return Ok((
+                    ws.ws_xpixel as u32 / ws.ws_col as u32,
+                    ws.ws_ypixel as u32 / ws.ws_row as u32,
+                ));
+            }
         }
-        if ws.ws_col == 0 || ws.ws_row == 0 {
-            return Err("terminal reports zero cell dimensions".into());
+
+        // Fall back to /dev/tty — the controlling terminal.
+        let tty = std::ffi::CString::new("/dev/tty").unwrap();
+        let tty_fd = libc::open(tty.as_ptr(), libc::O_RDONLY | libc::O_CLOEXEC);
+        if tty_fd >= 0 {
+            let ret = libc::ioctl(tty_fd, libc::TIOCGWINSZ, &mut ws);
+            libc::close(tty_fd);
+            if ret == 0 {
+                if ws.ws_col == 0 || ws.ws_row == 0 {
+                    return Err("terminal reports zero cell dimensions".into());
+                }
+                if ws.ws_xpixel == 0 || ws.ws_ypixel == 0 {
+                    return Err("terminal does not report pixel dimensions (try a different terminal)".into());
+                }
+                return Ok((
+                    ws.ws_xpixel as u32 / ws.ws_col as u32,
+                    ws.ws_ypixel as u32 / ws.ws_row as u32,
+                ));
+            }
         }
-        if ws.ws_xpixel == 0 || ws.ws_ypixel == 0 {
-            return Err("terminal does not report pixel dimensions (try a different terminal)".into());
-        }
-        Ok((
-            ws.ws_xpixel as u32 / ws.ws_col as u32,
-            ws.ws_ypixel as u32 / ws.ws_row as u32,
-        ))
+
+        Err("ioctl TIOCGWINSZ failed on all fds including /dev/tty".into())
     }
 }
 
