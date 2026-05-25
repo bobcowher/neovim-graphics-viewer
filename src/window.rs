@@ -249,6 +249,17 @@ impl ApplicationHandler<Command> for App {
                     }
                 }
             }
+            Command::Hide => {
+                if let Some(ref win) = self.window {
+                    win.set_visible(false);
+                }
+            }
+            Command::Unhide => {
+                if let Some(ref win) = self.window {
+                    win.set_visible(true);
+                    self.request_redraw();
+                }
+            }
             Command::Quit => {
                 event_loop.exit();
             }

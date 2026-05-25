@@ -7,10 +7,12 @@ pub enum Command {
     Zoom { factor: f32 },
     Pan { dx: i32, dy: i32 },
     Reset,
-    Quit,
     PlayPause,
     Seek { delta: i32 },
     Rewind,
+    Hide,
+    Unhide,
+    Quit,
 }
 
 #[derive(Debug, Serialize)]

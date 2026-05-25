@@ -163,6 +163,14 @@ function M.open(path)
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd("VimResized",  { group = state.aug_id, callback = on_resize })
     vim.api.nvim_create_autocmd("WinResized",  { group = state.aug_id, callback = on_resize })
+    vim.api.nvim_create_autocmd("FocusLost",   {
+        group = state.aug_id,
+        callback = function() send({ cmd = "hide" }) end,
+    })
+    vim.api.nvim_create_autocmd("FocusGained", {
+        group = state.aug_id,
+        callback = function() send({ cmd = "unhide" }) end,
+    })
 end
 
 function M.close()
