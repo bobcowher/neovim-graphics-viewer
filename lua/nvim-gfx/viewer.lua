@@ -2,14 +2,21 @@ local geometry = require("nvim-gfx.geometry")
 
 local M = {}
 
+local VIDEO_EXTS = { mp4=true, mkv=true, webm=true, avi=true, mov=true, m4v=true }
+
 local state = {
-    job_id    = nil,
-    bufnr     = nil,
+    job_id     = nil,
+    bufnr      = nil,
     orig_bufnr = nil,
-    winid     = nil,
-    aug_id    = nil,
-    path      = nil,
+    winid      = nil,
+    aug_id     = nil,
+    path       = nil,
 }
+
+local function is_video(path)
+    local ext = path:match("%.(%w+)$")
+    return ext ~= nil and VIDEO_EXTS[ext:lower()] == true
+end
 
 local function binary_path()
     local src = debug.getinfo(1, "S").source:sub(2)
@@ -28,8 +35,6 @@ local function cleanup()
         pcall(vim.api.nvim_del_augroup_by_id, state.aug_id)
         state.aug_id = nil
     end
-    -- Wipe the original image buffer before the scratch buffer so Neovim
-    -- never jumps back to the garbled binary content.
     if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
         pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
     end
@@ -62,21 +67,40 @@ local function on_exit(_, code, _)
     cleanup()
 end
 
-local function set_keymaps(bufnr)
+local function set_image_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
-    vim.keymap.set("n", "q",       function() M.close() end, o)
-    vim.keymap.set("n", "+",       function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "=",       function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "-",       function() send({ cmd = "zoom", factor = 0.8  }) end, o)
-    vim.keymap.set("n", "r",       function() send({ cmd = "reset" }) end, o)
-    vim.keymap.set("n", "h",       function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
-    vim.keymap.set("n", "<Left>",  function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
-    vim.keymap.set("n", "l",       function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
-    vim.keymap.set("n", "<Right>", function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
-    vim.keymap.set("n", "k",       function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
-    vim.keymap.set("n", "<Up>",    function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
-    vim.keymap.set("n", "j",       function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
-    vim.keymap.set("n", "<Down>",  function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
+    vim.keymap.set("n", "q",        function() M.close() end, o)
+    vim.keymap.set("n", "+",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "=",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "-",        function() send({ cmd = "zoom", factor = 0.8  }) end, o)
+    vim.keymap.set("n", "r",        function() send({ cmd = "reset" }) end, o)
+    vim.keymap.set("n", "h",        function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
+    vim.keymap.set("n", "<Left>",   function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
+    vim.keymap.set("n", "l",        function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
+    vim.keymap.set("n", "<Right>",  function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
+    vim.keymap.set("n", "k",        function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
+    vim.keymap.set("n", "<Up>",     function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
+    vim.keymap.set("n", "j",        function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
+    vim.keymap.set("n", "<Down>",   function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
+end
+
+local function set_video_keymaps(bufnr)
+    local o = { noremap = true, silent = true, buffer = bufnr }
+    vim.keymap.set("n", "q",        function() M.close() end, o)
+    vim.keymap.set("n", "p",        function() send({ cmd = "play_pause" }) end, o)
+    vim.keymap.set("n", "<Space>",  function() send({ cmd = "play_pause" }) end, o)
+    vim.keymap.set("n", "h",        function() send({ cmd = "seek", delta = -1  }) end, o)
+    vim.keymap.set("n", "<Left>",   function() send({ cmd = "seek", delta = -1  }) end, o)
+    vim.keymap.set("n", "l",        function() send({ cmd = "seek", delta =  1  }) end, o)
+    vim.keymap.set("n", "<Right>",  function() send({ cmd = "seek", delta =  1  }) end, o)
+    vim.keymap.set("n", "j",        function() send({ cmd = "seek", delta = -10 }) end, o)
+    vim.keymap.set("n", "<Down>",   function() send({ cmd = "seek", delta = -10 }) end, o)
+    vim.keymap.set("n", "k",        function() send({ cmd = "seek", delta =  10 }) end, o)
+    vim.keymap.set("n", "<Up>",     function() send({ cmd = "seek", delta =  10 }) end, o)
+    vim.keymap.set("n", "+",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "=",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "-",        function() send({ cmd = "zoom", factor = 0.8  }) end, o)
+    vim.keymap.set("n", "r",        function() send({ cmd = "rewind" }) end, o)
 end
 
 function M.open(path)
@@ -94,25 +118,31 @@ function M.open(path)
 
     if state.job_id then M.close() end
 
-    state.winid     = vim.api.nvim_get_current_win()
+    state.winid      = vim.api.nvim_get_current_win()
     state.orig_bufnr = vim.api.nvim_get_current_buf()
-    state.path      = path
+    state.path       = path
 
     local bufnr = vim.api.nvim_create_buf(false, true)
     state.bufnr = bufnr
     vim.api.nvim_win_set_buf(state.winid, bufnr)
     vim.bo[bufnr].bufhidden = "wipe"
 
-    set_keymaps(bufnr)
+    if is_video(path) then
+        set_video_keymaps(bufnr)
+    else
+        set_image_keymaps(bufnr)
+    end
 
     state.job_id = vim.fn.jobstart({ bin }, {
-        on_stdout = on_stdout,
-        on_exit   = on_exit,
+        on_stdout       = on_stdout,
+        on_exit         = on_exit,
         stdout_buffered = false,
     })
 
     local geo = geometry.win_geometry(state.winid)
-    send({ cmd = "show", path = path, x = geo.x, y = geo.y, w = geo.w, h = geo.h, cols = geo.cols, rows = geo.rows })
+    send({ cmd = "show", path = path,
+           x = geo.x, y = geo.y, w = geo.w, h = geo.h,
+           cols = geo.cols, rows = geo.rows })
 
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd("VimResized", {
@@ -120,7 +150,9 @@ function M.open(path)
         callback = function()
             if not state.job_id then return end
             local g = geometry.win_geometry(state.winid)
-            send({ cmd = "show", path = state.path, x = g.x, y = g.y, w = g.w, h = g.h, cols = g.cols, rows = g.rows })
+            send({ cmd = "show", path = state.path,
+                   x = g.x, y = g.y, w = g.w, h = g.h,
+                   cols = g.cols, rows = g.rows })
         end,
     })
 end
