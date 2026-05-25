@@ -8,8 +8,6 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::window::{Window, WindowId, WindowLevel};
-#[cfg(target_os = "linux")]
-use winit::platform::x11::WindowAttributesExtX11;
 
 use crate::geometry::{self, PixelGeometry};
 use crate::protocol::{Command, Event};
@@ -28,6 +26,8 @@ pub struct App {
     renderer: Renderer,
     cell_w: u32,
     cell_h: u32,
+    win_w: u32,
+    win_h: u32,
     video: Option<VideoState>,
     current_path: Option<String>,
 }
@@ -41,26 +41,27 @@ impl App {
             renderer: Renderer::new(),
             cell_w: 8,
             cell_h: 16,
+            win_w: 0,
+            win_h: 0,
             video: None,
             current_path: None,
         }
     }
 
     fn ensure_window(&mut self, event_loop: &ActiveEventLoop, geo: &PixelGeometry) {
+        self.win_w = geo.width;
+        self.win_h = geo.height;
         if let Some(ref win) = self.window {
             win.set_outer_position(PhysicalPosition::new(geo.x, geo.y));
             let _ = win.request_inner_size(PhysicalSize::new(geo.width, geo.height));
         } else {
-            #[allow(unused_mut)]
-            let mut attrs = Window::default_attributes()
+            let attrs = Window::default_attributes()
                 .with_decorations(false)
                 .with_visible(false)
                 .with_active(false)
                 .with_window_level(WindowLevel::AlwaysOnTop)
                 .with_position(PhysicalPosition::new(geo.x, geo.y))
                 .with_inner_size(PhysicalSize::new(geo.width, geo.height));
-            #[cfg(target_os = "linux")]
-            { attrs = attrs.with_override_redirect(true); }
 
             match event_loop.create_window(attrs) {
                 Ok(win) => {
@@ -86,22 +87,15 @@ impl App {
     }
 
     fn do_render(&mut self) {
-        let (Some(ref win), Some(ref mut surf)) = (&self.window, &mut self.surface) else {
-            return;
-        };
-        let size = win.inner_size();
-        if size.width == 0 || size.height == 0 {
-            return;
-        }
-        surf.resize(
-            NonZeroU32::new(size.width).unwrap(),
-            NonZeroU32::new(size.height).unwrap(),
-        )
-        .expect("surface resize");
+        let w = self.win_w;
+        let h = self.win_h;
+        if w == 0 || h == 0 { return; }
+        let Some(ref mut surf) = self.surface else { return };
+        surf.resize(NonZeroU32::new(w).unwrap(), NonZeroU32::new(h).unwrap())
+            .expect("surface resize");
         let mut buf = surf.buffer_mut().expect("buffer_mut");
-        self.renderer.render(&mut buf, size.width, size.height);
+        self.renderer.render(&mut buf, w, h);
         buf.present().expect("present");
-        win.set_visible(true);
     }
 }
 
@@ -118,8 +112,14 @@ impl ApplicationHandler<Command> for App {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
 
     fn window_event(&mut self, _event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if let WindowEvent::RedrawRequested = event {
-            self.do_render();
+        match event {
+            WindowEvent::RedrawRequested => { self.do_render(); }
+            WindowEvent::Resized(size) => {
+                self.win_w = size.width;
+                self.win_h = size.height;
+                if self.video.is_none() { self.do_render(); }
+            }
+            _ => {}
         }
     }
 
@@ -149,6 +149,9 @@ impl ApplicationHandler<Command> for App {
                 }).unwrap_or((0, 0));
                 self.renderer.update_frame(pixels, w, h);
                 self.do_render();
+                if let Some(ref win) = self.window {
+                    win.set_visible(true);
+                }
             }
             Some(Ok(None)) => {
                 // End of video — last frame stays on screen
@@ -162,11 +165,7 @@ impl ApplicationHandler<Command> for App {
         }
 
         if let Some(ref vs) = self.video {
-            if vs.decoder.is_playing() && !vs.decoder.is_finished() {
-                event_loop.set_control_flow(ControlFlow::Poll);
-            } else {
-                event_loop.set_control_flow(ControlFlow::Wait);
-            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(vs.next_frame_time));
         }
     }
 
@@ -192,7 +191,6 @@ impl ApplicationHandler<Command> for App {
                                             decoder,
                                             next_frame_time: Instant::now(),
                                         });
-                                        self.request_redraw();
                                         emit(Event::Ready);
                                     }
                                     Err(msg) => {
@@ -201,13 +199,15 @@ impl ApplicationHandler<Command> for App {
                                     }
                                 }
                             }
-                            // else: same file already playing — window already repositioned above
                         } else {
                             self.video = None;
                             self.current_path = Some(path.clone());
                             match self.renderer.load(&path) {
                                 Ok(()) => {
-                                    self.request_redraw();
+                                    self.do_render();
+                                    if let Some(ref win) = self.window {
+                                        win.set_visible(true);
+                                    }
                                     emit(Event::Ready);
                                 }
                                 Err(msg) => {
@@ -270,9 +270,9 @@ impl ApplicationHandler<Command> for App {
                 }
             }
             Command::Unhide => {
+                self.do_render();
                 if let Some(ref win) = self.window {
                     win.set_visible(true);
-                    self.request_redraw();
                 }
             }
             Command::Quit => {
