@@ -128,6 +128,13 @@ function M.open(path)
     vim.bo[bufnr].bufhidden = "wipe"
     vim.bo[bufnr].filetype  = "nvim-gfx"
 
+    -- Wipe the original image buffer immediately so no other plugin can find
+    -- and load the raw binary content into any window.
+    if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
+        pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
+        state.orig_bufnr = nil
+    end
+
     if is_video(path) then
         set_video_keymaps(bufnr)
     else
