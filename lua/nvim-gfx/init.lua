@@ -31,9 +31,10 @@ function M.setup(_opts)
     end, { desc = "Build nvim-gfx Rust binary" })
 
     vim.api.nvim_create_autocmd("BufReadPost", {
-        pattern  = { "*.png", "*.jpg", "*.jpeg", "*.webp" },
+        pattern  = { "*.png", "*.jpg", "*.jpeg", "*.webp",
+                     "*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.m4v" },
         callback = function(ev) viewer.open(ev.file) end,
-        desc     = "Auto-preview image files with nvim-gfx",
+        desc     = "Auto-preview image and video files with nvim-gfx",
     })
 end
 
