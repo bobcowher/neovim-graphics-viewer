@@ -196,6 +196,39 @@ The Lua plugin locates the binary at `<plugin_root>/bin/nvim-gfx`, where `<plugi
 
 ---
 
+## Test Script
+
+To test the plugin without touching the user's real Neovim config:
+
+```bash
+# scripts/test.sh
+#!/usr/bin/env bash
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+nvim -u "$DIR/scripts/test-init.lua" "$@"
+```
+
+```lua
+-- scripts/test-init.lua
+-- Minimal Neovim config for testing nvim-gfx in isolation.
+-- Does NOT load the user's real init.lua.
+local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1).source:sub(2), ":h:h")
+vim.opt.runtimepath:prepend(plugin_dir)
+
+require("nvim-gfx").setup()
+```
+
+Usage:
+```bash
+./scripts/test.sh path/to/image.png
+# or just
+./scripts/test.sh
+# then :ViewImage path/to/image.png
+```
+
+`nvim -u` replaces `init.lua` entirely — the user's config is never sourced. Pass extra args (file paths, etc.) through to Neovim via `"$@"`.
+
+---
+
 ## Out of Scope (v1)
 
 - Video playback (v2)
