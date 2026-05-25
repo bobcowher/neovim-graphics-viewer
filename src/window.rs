@@ -145,6 +145,9 @@ impl ApplicationHandler<Command> for App {
             Command::Quit => {
                 event_loop.exit();
             }
+            Command::PlayPause => {}
+            Command::Seek { delta: _ } => {}
+            Command::Rewind => {}
         }
     }
 }

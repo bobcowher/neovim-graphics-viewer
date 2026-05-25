@@ -8,6 +8,9 @@ pub enum Command {
     Pan { dx: i32, dy: i32 },
     Reset,
     Quit,
+    PlayPause,
+    Seek { delta: i32 },
+    Rewind,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,5 +82,35 @@ mod tests {
     fn serialize_error() {
         let json = serde_json::to_string(&Event::Error { msg: "oops".into() }).unwrap();
         assert_eq!(json, r#"{"event":"error","msg":"oops"}"#);
+    }
+
+    #[test]
+    fn deserialize_play_pause() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"play_pause"}"#).unwrap();
+        assert!(matches!(cmd, Command::PlayPause));
+    }
+
+    #[test]
+    fn deserialize_seek_forward() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"seek","delta":1}"#).unwrap();
+        match cmd {
+            Command::Seek { delta } => assert_eq!(delta, 1),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_seek_backward() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"seek","delta":-10}"#).unwrap();
+        match cmd {
+            Command::Seek { delta } => assert_eq!(delta, -10),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_rewind() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"rewind"}"#).unwrap();
+        assert!(matches!(cmd, Command::Rewind));
     }
 }
