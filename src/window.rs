@@ -41,6 +41,7 @@ impl App {
             let attrs = Window::default_attributes()
                 .with_decorations(false)
                 .with_visible(false)
+                .with_active(false)
                 .with_window_level(WindowLevel::AlwaysOnTop)
                 .with_position(PhysicalPosition::new(geo.x, geo.y))
                 .with_inner_size(PhysicalSize::new(geo.width, geo.height));
