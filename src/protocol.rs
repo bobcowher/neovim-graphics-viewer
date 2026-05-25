@@ -29,6 +29,7 @@ mod tests {
             Command::Show { path, x, y, w, h } => {
                 assert_eq!(path, "/tmp/a.png");
                 assert_eq!(x, 0);
+                assert_eq!(y, 0);
                 assert_eq!(w, 80);
                 assert_eq!(h, 24);
             }
