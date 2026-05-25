@@ -148,7 +148,7 @@ impl ApplicationHandler<Command> for App {
                     (vs.decoder.width(), vs.decoder.height())
                 }).unwrap_or((0, 0));
                 self.renderer.update_frame(pixels, w, h);
-                self.request_redraw();
+                self.do_render();
             }
             Some(Ok(None)) => {
                 // End of video — last frame stays on screen
@@ -162,7 +162,11 @@ impl ApplicationHandler<Command> for App {
         }
 
         if let Some(ref vs) = self.video {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(vs.next_frame_time));
+            if vs.decoder.is_playing() && !vs.decoder.is_finished() {
+                event_loop.set_control_flow(ControlFlow::Poll);
+            } else {
+                event_loop.set_control_flow(ControlFlow::Wait);
+            }
         }
     }
 
