@@ -126,6 +126,7 @@ function M.open(path)
     state.bufnr = bufnr
     vim.api.nvim_win_set_buf(state.winid, bufnr)
     vim.bo[bufnr].bufhidden = "wipe"
+    vim.bo[bufnr].filetype  = "nvim-gfx"
 
     if is_video(path) then
         set_video_keymaps(bufnr)
@@ -144,17 +145,17 @@ function M.open(path)
            x = geo.x, y = geo.y, w = geo.w, h = geo.h,
            cols = geo.cols, rows = geo.rows })
 
+    local function on_resize()
+        if not state.job_id then return end
+        local g = geometry.win_geometry(state.winid)
+        send({ cmd = "show", path = state.path,
+               x = g.x, y = g.y, w = g.w, h = g.h,
+               cols = g.cols, rows = g.rows })
+    end
+
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
-    vim.api.nvim_create_autocmd("VimResized", {
-        group    = state.aug_id,
-        callback = function()
-            if not state.job_id then return end
-            local g = geometry.win_geometry(state.winid)
-            send({ cmd = "show", path = state.path,
-                   x = g.x, y = g.y, w = g.w, h = g.h,
-                   cols = g.cols, rows = g.rows })
-        end,
-    })
+    vim.api.nvim_create_autocmd("VimResized",  { group = state.aug_id, callback = on_resize })
+    vim.api.nvim_create_autocmd("WinResized",  { group = state.aug_id, callback = on_resize })
 end
 
 function M.close()
