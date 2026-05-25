@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
-    Show { path: String, x: u32, y: u32, w: u32, h: u32 },
+    Show { path: String, x: u32, y: u32, w: u32, h: u32, cols: u32, rows: u32 },
     Zoom { factor: f32 },
     Pan { dx: i32, dy: i32 },
     Reset,
@@ -23,15 +23,17 @@ mod tests {
 
     #[test]
     fn deserialize_show() {
-        let json = r#"{"cmd":"show","path":"/tmp/a.png","x":0,"y":0,"w":80,"h":24}"#;
+        let json = r#"{"cmd":"show","path":"/tmp/a.png","x":0,"y":0,"w":80,"h":24,"cols":200,"rows":50}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
-            Command::Show { path, x, y, w, h } => {
+            Command::Show { path, x, y, w, h, cols, rows } => {
                 assert_eq!(path, "/tmp/a.png");
                 assert_eq!(x, 0);
                 assert_eq!(y, 0);
                 assert_eq!(w, 80);
                 assert_eq!(h, 24);
+                assert_eq!(cols, 200);
+                assert_eq!(rows, 50);
             }
             _ => panic!("wrong variant"),
         }

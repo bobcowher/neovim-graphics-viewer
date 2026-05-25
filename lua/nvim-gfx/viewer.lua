@@ -105,7 +105,7 @@ function M.open(path)
     })
 
     local geo = geometry.win_geometry(state.winid)
-    send({ cmd = "show", path = path, x = geo.x, y = geo.y, w = geo.w, h = geo.h })
+    send({ cmd = "show", path = path, x = geo.x, y = geo.y, w = geo.w, h = geo.h, cols = geo.cols, rows = geo.rows })
 
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd("VimResized", {
@@ -113,7 +113,7 @@ function M.open(path)
         callback = function()
             if not state.job_id then return end
             local g = geometry.win_geometry(state.winid)
-            send({ cmd = "show", path = state.path, x = g.x, y = g.y, w = g.w, h = g.h })
+            send({ cmd = "show", path = state.path, x = g.x, y = g.y, w = g.w, h = g.h, cols = g.cols, rows = g.rows })
         end,
     })
 end

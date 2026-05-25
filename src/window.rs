@@ -99,8 +99,8 @@ impl ApplicationHandler<Command> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, cmd: Command) {
         match cmd {
-            Command::Show { path, x, y, w, h } => {
-                match geometry::compute_geometry(x, y, w, h) {
+            Command::Show { path, x, y, w, h, cols, rows } => {
+                match geometry::compute_geometry(x, y, w, h, cols, rows) {
                     Ok(geo) => {
                         if w > 0 { self.cell_w = geo.width / w; }
                         if h > 0 { self.cell_h = geo.height / h; }
