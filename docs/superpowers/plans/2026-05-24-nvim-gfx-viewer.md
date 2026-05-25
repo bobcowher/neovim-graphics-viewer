@@ -1245,3 +1245,23 @@ git add .
 git status  # confirm only expected files
 git commit -m "chore: verify end-to-end test complete"
 ```
+
+---
+
+### Task 13: Blog Post (teaandrobots)
+
+**Files:**
+- Read existing posts in `/home/robertcowher/webapps/teaandrobots` to understand format and style
+- Create a new draft post about nvim-gfx
+
+- [ ] **Step 1: Study site structure and style**
+
+Explore `/home/robertcowher/webapps/teaandrobots` — find where posts live, what format they use (markdown, HTML, frontmatter), and read 1-2 existing software posts for tone and structure.
+
+- [ ] **Step 2: Write the post**
+
+Cover: what the plugin does, why (images in Neovim without leaving the terminal), the architecture (Rust binary + Lua, X11 overlay, stdio IPC), zoom/pan controls, how to install and build. Match the site's voice and length. Set status to draft in frontmatter.
+
+- [ ] **Step 3: Save as draft**
+
+Save to the appropriate posts directory with draft status set. Do NOT push or deploy.
