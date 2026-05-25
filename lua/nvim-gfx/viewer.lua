@@ -65,7 +65,6 @@ end
 local function set_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
     vim.keymap.set("n", "q",       function() M.close() end, o)
-    vim.keymap.set("n", "<Esc>",   function() M.close() end, o)
     vim.keymap.set("n", "+",       function() send({ cmd = "zoom", factor = 1.25 }) end, o)
     vim.keymap.set("n", "=",       function() send({ cmd = "zoom", factor = 1.25 }) end, o)
     vim.keymap.set("n", "-",       function() send({ cmd = "zoom", factor = 0.8  }) end, o)
