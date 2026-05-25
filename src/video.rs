@@ -83,29 +83,33 @@ impl VideoDecoder {
                     }
                     return Ok(Some(self.to_xrgb(&frame)?));
                 }
-                // AVERROR(EAGAIN) = -(libc::EAGAIN) = -11 on Linux — need more input
-                Err(ffmpeg::Error::Other { errno }) if errno == -(libc::EAGAIN as i32) => {}
                 Err(ffmpeg::Error::Eof) => {
                     self.finished = true;
                     self.playing = false;
                     return Ok(None);
                 }
-                Err(e) => return Err(format!("receive_frame: {e}")),
+                Err(_) => {
+                    // EAGAIN or similar: decoder needs more packets — fall through to feed one
+                }
             }
 
-            // Feed the next packet from the file into the decoder
-            let next = self.input_ctx.packets().next();
-            match next {
-                Some((stream, packet)) => {
-                    if stream.index() == self.video_stream_idx {
-                        self.decoder.send_packet(&packet)
-                            .map_err(|e| format!("send_packet: {e}"))?;
+            // Feed the next video packet; skip non-video packets (audio, subtitles)
+            loop {
+                match self.input_ctx.packets().next() {
+                    Some((stream, packet)) => {
+                        if stream.index() == self.video_stream_idx {
+                            self.decoder.send_packet(&packet)
+                                .map_err(|e| format!("send_packet: {e}"))?;
+                            break;
+                        }
+                        // Non-video packet — read next
                     }
-                }
-                None => {
-                    // File EOF — flush remaining buffered frames
-                    self.decoder.send_eof()
-                        .map_err(|e| format!("send_eof: {e}"))?;
+                    None => {
+                        // File EOF — flush buffered frames
+                        self.decoder.send_eof()
+                            .map_err(|e| format!("send_eof: {e}"))?;
+                        break;
+                    }
                 }
             }
         }
