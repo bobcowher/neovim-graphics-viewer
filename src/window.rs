@@ -7,6 +7,8 @@ use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::{Window, WindowId, WindowLevel};
+#[cfg(target_os = "linux")]
+use winit::platform::x11::WindowAttributesExtX11;
 
 use crate::geometry::{self, PixelGeometry};
 use crate::protocol::{Command, Event};
@@ -38,13 +40,18 @@ impl App {
             win.set_outer_position(PhysicalPosition::new(geo.x, geo.y));
             let _ = win.request_inner_size(PhysicalSize::new(geo.width, geo.height));
         } else {
-            let attrs = Window::default_attributes()
+            #[allow(unused_mut)]
+            let mut attrs = Window::default_attributes()
                 .with_decorations(false)
                 .with_visible(false)
                 .with_active(false)
                 .with_window_level(WindowLevel::AlwaysOnTop)
                 .with_position(PhysicalPosition::new(geo.x, geo.y))
                 .with_inner_size(PhysicalSize::new(geo.width, geo.height));
+            // override_redirect bypasses the WM entirely — the window can never
+            // steal keyboard focus, which is required for Neovim keymaps to work.
+            #[cfg(target_os = "linux")]
+            { attrs = attrs.with_override_redirect(true); }
 
             match event_loop.create_window(attrs) {
                 Ok(win) => {
