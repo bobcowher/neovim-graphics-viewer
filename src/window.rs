@@ -29,6 +29,7 @@ pub struct App {
     cell_w: u32,
     cell_h: u32,
     video: Option<VideoState>,
+    current_path: Option<String>,
 }
 
 impl App {
@@ -41,6 +42,7 @@ impl App {
             cell_w: 8,
             cell_h: 16,
             video: None,
+            current_path: None,
         }
     }
 
@@ -174,22 +176,31 @@ impl ApplicationHandler<Command> for App {
                         self.ensure_window(event_loop, &geo);
 
                         if is_video_path(&path) {
-                            match VideoDecoder::open(&path) {
-                                Ok(decoder) => {
-                                    self.video = Some(VideoState {
-                                        decoder,
-                                        next_frame_time: Instant::now(),
-                                    });
-                                    self.request_redraw();
-                                    emit(Event::Ready);
-                                }
-                                Err(msg) => {
-                                    emit(Event::Error { msg });
-                                    event_loop.exit();
+                            // Only (re)open the decoder when the path changes;
+                            // resize events reuse the same path and must not restart playback.
+                            let need_open = self.current_path.as_deref() != Some(path.as_str())
+                                || self.video.is_none();
+                            if need_open {
+                                match VideoDecoder::open(&path) {
+                                    Ok(decoder) => {
+                                        self.current_path = Some(path);
+                                        self.video = Some(VideoState {
+                                            decoder,
+                                            next_frame_time: Instant::now(),
+                                        });
+                                        self.request_redraw();
+                                        emit(Event::Ready);
+                                    }
+                                    Err(msg) => {
+                                        emit(Event::Error { msg });
+                                        event_loop.exit();
+                                    }
                                 }
                             }
+                            // else: same file already playing — window already repositioned above
                         } else {
                             self.video = None;
+                            self.current_path = Some(path.clone());
                             match self.renderer.load(&path) {
                                 Ok(()) => {
                                     self.request_redraw();
