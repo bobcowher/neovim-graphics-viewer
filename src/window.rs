@@ -176,11 +176,11 @@ impl ApplicationHandler<Command> for App {
                         if is_video_path(&path) {
                             match VideoDecoder::open(&path) {
                                 Ok(decoder) => {
-                                    let frame_dur = decoder.frame_duration();
                                     self.video = Some(VideoState {
                                         decoder,
-                                        next_frame_time: Instant::now() + frame_dur,
+                                        next_frame_time: Instant::now(),
                                     });
+                                    self.request_redraw();
                                     emit(Event::Ready);
                                 }
                                 Err(msg) => {

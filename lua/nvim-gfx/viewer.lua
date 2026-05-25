@@ -125,8 +125,9 @@ function M.open(path)
     local bufnr = vim.api.nvim_create_buf(false, true)
     state.bufnr = bufnr
     vim.api.nvim_win_set_buf(state.winid, bufnr)
-    vim.bo[bufnr].bufhidden = "wipe"
-    vim.bo[bufnr].filetype  = "nvim-gfx"
+    vim.bo[bufnr].bufhidden  = "wipe"
+    vim.bo[bufnr].filetype   = "nvim-gfx"
+    vim.bo[bufnr].modifiable = false
 
     -- Wipe the original image buffer immediately so no other plugin can find
     -- and load the raw binary content into any window.
@@ -163,6 +164,16 @@ function M.open(path)
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
     vim.api.nvim_create_autocmd("VimResized",  { group = state.aug_id, callback = on_resize })
     vim.api.nvim_create_autocmd("WinResized",  { group = state.aug_id, callback = on_resize })
+    -- If mouse click passes through overlay and lands on this buffer, redirect to prev window.
+    vim.api.nvim_create_autocmd("WinEnter", {
+        group  = state.aug_id,
+        buffer = bufnr,
+        callback = function()
+            if vim.v.mouse_win ~= 0 and #vim.api.nvim_list_wins() > 1 then
+                vim.cmd("wincmd p")
+            end
+        end,
+    })
     vim.api.nvim_create_autocmd("FocusLost",   {
         group = state.aug_id,
         callback = function() send({ cmd = "hide" }) end,
