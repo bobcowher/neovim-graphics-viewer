@@ -3,11 +3,12 @@ local geometry = require("nvim-gfx.geometry")
 local M = {}
 
 local state = {
-    job_id = nil,
-    bufnr  = nil,
-    winid  = nil,
-    aug_id = nil,
-    path   = nil,
+    job_id    = nil,
+    bufnr     = nil,
+    orig_bufnr = nil,
+    winid     = nil,
+    aug_id    = nil,
+    path      = nil,
 }
 
 local function binary_path()
@@ -27,13 +28,19 @@ local function cleanup()
         pcall(vim.api.nvim_del_augroup_by_id, state.aug_id)
         state.aug_id = nil
     end
+    -- Wipe the original image buffer before the scratch buffer so Neovim
+    -- never jumps back to the garbled binary content.
+    if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
+        pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
+    end
     if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
         vim.api.nvim_buf_delete(state.bufnr, { force = true })
     end
-    state.job_id = nil
-    state.bufnr  = nil
-    state.winid  = nil
-    state.path   = nil
+    state.job_id     = nil
+    state.bufnr      = nil
+    state.orig_bufnr = nil
+    state.winid      = nil
+    state.path       = nil
 end
 
 local function on_stdout(_, data, _)
@@ -88,8 +95,9 @@ function M.open(path)
 
     if state.job_id then M.close() end
 
-    state.winid = vim.api.nvim_get_current_win()
-    state.path  = path
+    state.winid     = vim.api.nvim_get_current_win()
+    state.orig_bufnr = vim.api.nvim_get_current_buf()
+    state.path      = path
 
     local bufnr = vim.api.nvim_create_buf(false, true)
     state.bufnr = bufnr
