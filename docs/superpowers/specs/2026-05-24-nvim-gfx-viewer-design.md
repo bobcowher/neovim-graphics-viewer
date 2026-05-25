@@ -209,11 +209,18 @@ nvim -u "$DIR/scripts/test-init.lua" "$@"
 
 ```lua
 -- scripts/test-init.lua
--- Minimal Neovim config for testing nvim-gfx in isolation.
--- Does NOT load the user's real init.lua.
+-- Loads the user's real config (~/.config/nvim/init.lua) with nvim-gfx
+-- injected into rtp before lazy.nvim initializes.
 local plugin_dir = vim.fn.fnamemodify(debug.getinfo(1).source:sub(2), ":h:h")
-vim.opt.runtimepath:prepend(plugin_dir)
 
+-- Prepend before real config so plugin/ is in rtp when lazy processes it.
+-- Lazy only manages its own plugin paths — manual prepends survive.
+vim.opt.rtp:prepend(plugin_dir)
+
+dofile(vim.fn.expand("~/.config/nvim/init.lua"))
+
+-- Call setup() after lazy finishes. plugin/nvim-gfx.lua is auto-sourced
+-- via rtp but does not call setup() itself — that stays explicit.
 require("nvim-gfx").setup()
 ```
 
@@ -225,7 +232,7 @@ Usage:
 # then :ViewImage path/to/image.png
 ```
 
-`nvim -u` replaces `init.lua` entirely — the user's config is never sourced. Pass extra args (file paths, etc.) through to Neovim via `"$@"`.
+`nvim -u` replaces init file selection — `~/.config/nvim/init.lua` is sourced explicitly via `dofile`, so the full real config (lazy plugins, keymaps, colorscheme) loads normally. Pass extra args through to Neovim via `"$@"`.
 
 ---
 
