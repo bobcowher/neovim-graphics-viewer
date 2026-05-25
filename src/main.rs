@@ -1,6 +1,7 @@
 mod geometry;
 mod protocol;
 mod renderer;
+mod video;
 mod window;
 
 use std::io::BufRead;
