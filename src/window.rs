@@ -149,9 +149,6 @@ impl ApplicationHandler<Command> for App {
                 }).unwrap_or((0, 0));
                 self.renderer.update_frame(pixels, w, h);
                 self.do_render();
-                if let Some(ref win) = self.window {
-                    win.set_visible(true);
-                }
             }
             Some(Ok(None)) => {
                 // End of video — last frame stays on screen
@@ -191,6 +188,9 @@ impl ApplicationHandler<Command> for App {
                                             decoder,
                                             next_frame_time: Instant::now(),
                                         });
+                                        if let Some(ref win) = self.window {
+                                            win.set_visible(true);
+                                        }
                                         emit(Event::Ready);
                                     }
                                     Err(msg) => {
@@ -264,17 +264,8 @@ impl ApplicationHandler<Command> for App {
                     }
                 }
             }
-            Command::Hide => {
-                if let Some(ref win) = self.window {
-                    win.set_visible(false);
-                }
-            }
-            Command::Unhide => {
-                self.do_render();
-                if let Some(ref win) = self.window {
-                    win.set_visible(true);
-                }
-            }
+            Command::Hide => {}
+            Command::Unhide => {}
             Command::Quit => {
                 event_loop.exit();
             }
