@@ -167,7 +167,9 @@ impl ApplicationHandler<Command> for App {
         }
 
         if let Some(ref vs) = self.video {
-            event_loop.set_control_flow(ControlFlow::WaitUntil(vs.next_frame_time));
+            if vs.decoder.is_playing() && !vs.decoder.is_finished() {
+                event_loop.set_control_flow(ControlFlow::WaitUntil(vs.next_frame_time));
+            }
         }
     }
 
