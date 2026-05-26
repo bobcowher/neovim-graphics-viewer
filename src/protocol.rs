@@ -3,15 +3,13 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Deserialize)]
 #[serde(tag = "cmd", rename_all = "snake_case")]
 pub enum Command {
-    Show { path: String, x: u32, y: u32, w: u32, h: u32, cols: u32, rows: u32 },
+    Show { path: String, row: u32, col: u32, width: u32, height: u32 },
     Zoom { factor: f32 },
     Pan { dx: i32, dy: i32 },
     Reset,
     PlayPause,
     Seek { delta: i32 },
     Rewind,
-    Hide,
-    Unhide,
     Quit,
 }
 
@@ -27,21 +25,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn deserialize_show() {
-        let json = r#"{"cmd":"show","path":"/tmp/a.png","x":0,"y":0,"w":80,"h":24,"cols":200,"rows":50}"#;
+    fn deserialize_show_cell_coords() {
+        let json = r#"{"cmd":"show","path":"/tmp/a.png","row":2,"col":5,"width":80,"height":24}"#;
         let cmd: Command = serde_json::from_str(json).unwrap();
         match cmd {
-            Command::Show { path, x, y, w, h, cols, rows } => {
+            Command::Show { path, row, col, width, height } => {
                 assert_eq!(path, "/tmp/a.png");
-                assert_eq!(x, 0);
-                assert_eq!(y, 0);
-                assert_eq!(w, 80);
-                assert_eq!(h, 24);
-                assert_eq!(cols, 200);
-                assert_eq!(rows, 50);
+                assert_eq!(row, 2);
+                assert_eq!(col, 5);
+                assert_eq!(width, 80);
+                assert_eq!(height, 24);
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn hide_unhide_do_not_exist() {
+        let json = r#"{"cmd":"show","path":"/tmp/a.png","x":0,"y":0,"w":80,"h":24,"cols":200,"rows":50}"#;
+        assert!(serde_json::from_str::<Command>(&json).is_err());
     }
 
     #[test]
@@ -93,16 +95,7 @@ mod tests {
     }
 
     #[test]
-    fn deserialize_seek_forward() {
-        let cmd: Command = serde_json::from_str(r#"{"cmd":"seek","delta":1}"#).unwrap();
-        match cmd {
-            Command::Seek { delta } => assert_eq!(delta, 1),
-            _ => panic!("wrong variant"),
-        }
-    }
-
-    #[test]
-    fn deserialize_seek_backward() {
+    fn deserialize_seek() {
         let cmd: Command = serde_json::from_str(r#"{"cmd":"seek","delta":-10}"#).unwrap();
         match cmd {
             Command::Seek { delta } => assert_eq!(delta, -10),
