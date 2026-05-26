@@ -47,6 +47,12 @@ mod tests {
     }
 
     #[test]
+    fn hide_command_rejected() {
+        assert!(serde_json::from_str::<Command>(r#"{"cmd":"hide"}"#).is_err());
+        assert!(serde_json::from_str::<Command>(r#"{"cmd":"unhide"}"#).is_err());
+    }
+
+    #[test]
     fn deserialize_zoom() {
         let cmd: Command = serde_json::from_str(r#"{"cmd":"zoom","factor":1.25}"#).unwrap();
         match cmd {
