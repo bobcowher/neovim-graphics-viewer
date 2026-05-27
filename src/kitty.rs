@@ -98,11 +98,15 @@ pub fn xrgb_to_rgba(pixels: &[u32]) -> Vec<u8> {
     out
 }
 
-fn open_tty() -> Result<std::fs::File, String> {
-    OpenOptions::new()
-        .write(true)
-        .open("/dev/tty")
-        .map_err(|e| format!("open /dev/tty: {e}"))
+fn open_tty() -> Result<Box<dyn Write>, String> {
+    match OpenOptions::new().write(true).open("/dev/tty") {
+        Ok(f) => Ok(Box::new(f)),
+        Err(_) => {
+            // No controlling terminal (e.g. piped test). Fall back to stdout so
+            // Kitty bytes are written somewhere and commands don't fail.
+            Ok(Box::new(std::io::stdout()))
+        }
+    }
 }
 
 fn write_kitty(
