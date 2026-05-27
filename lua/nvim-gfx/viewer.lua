@@ -150,15 +150,15 @@ function M.open(path)
 
     local geo = geometry.win_geometry(state.winid)
     send({ cmd = "show", path = path,
-           x = geo.x, y = geo.y, w = geo.w, h = geo.h,
-           cols = geo.cols, rows = geo.rows })
+           row = geo.row, col = geo.col,
+           width = geo.width, height = geo.height })
 
     local function on_resize()
         if not state.job_id then return end
         local g = geometry.win_geometry(state.winid)
         send({ cmd = "show", path = state.path,
-               x = g.x, y = g.y, w = g.w, h = g.h,
-               cols = g.cols, rows = g.rows })
+               row = g.row, col = g.col,
+               width = g.width, height = g.height })
     end
 
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
