@@ -135,13 +135,13 @@ impl App {
                 Ok(false)
             }
             Command::Quit => {
-                let _ = KittyRenderer::clear();
+                let _ = self.kitty.clear();
                 Ok(true)
             }
         }
     }
 
-    fn display_image(&self) -> Result<(), String> {
+    fn display_image(&mut self) -> Result<(), String> {
         if let Some(ref img) = self.image {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();

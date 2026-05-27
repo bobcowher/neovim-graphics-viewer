@@ -51,16 +51,10 @@ end
 local function on_stdout(_, data, _)
     for _, line in ipairs(data) do
         if line ~= "" then
-            if line:sub(1, 1) == "\x01" then
-                -- Terminal escape sequence from binary — write directly to the terminal.
-                io.write(line:sub(2))
-                io.flush()
-            else
-                local ok, ev = pcall(vim.json.decode, line)
-                if ok and type(ev) == "table" and ev.event == "error" then
-                    vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
-                    M.close()
-                end
+            local ok, ev = pcall(vim.json.decode, line)
+            if ok and type(ev) == "table" and ev.event == "error" then
+                vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
+                M.close()
             end
         end
     end
@@ -156,7 +150,14 @@ function M.open(path)
         set_image_keymaps(bufnr)
     end
 
+    local tty = vim.fn.resolve("/proc/self/fd/1")
+    if tty == "" then
+        vim.notify("nvim-gfx: could not resolve TTY path", vim.log.levels.ERROR)
+        return
+    end
+
     state.job_id = vim.fn.jobstart({ bin }, {
+        env             = { NVIM_GFX_TTY = tty },
         on_stdout       = on_stdout,
         on_stderr       = on_stderr,
         on_exit         = on_exit,
