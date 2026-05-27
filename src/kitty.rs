@@ -133,7 +133,7 @@ fn write_kitty(
         if i == 0 {
             write!(
                 tty,
-                "\x1b_Ga=T,f=32,s={src_w},v={src_h},c={dest_cols},r={dest_rows},i=1,q=2,m={m};{chunk_str}\x1b\\"
+                "\x1b_Ga=T,f=32,s={src_w},v={src_h},c={dest_cols},r={dest_rows},i=1,z=1,q=2,m={m};{chunk_str}\x1b\\"
             )
         } else {
             write!(tty, "\x1b_Gm={m};{chunk_str}\x1b\\")
