@@ -215,7 +215,6 @@ fn main() {
             }
             std::thread::sleep(Duration::from_millis(1));
         } else {
-            // No active video — block until a command arrives.
             match rx.recv() {
                 Ok(cmd) => match app.handle(cmd) {
                     Ok(true) => return,

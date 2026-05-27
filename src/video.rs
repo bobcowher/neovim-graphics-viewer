@@ -13,6 +13,7 @@ pub struct VideoDecoder {
     pub playing: bool,
     pub finished: bool,
     current_pts: i64,
+    flushed: bool,
 }
 
 impl VideoDecoder {
@@ -67,6 +68,7 @@ impl VideoDecoder {
             playing: true,
             finished: false,
             current_pts: 0,
+            flushed: false,
         })
     }
 
@@ -94,21 +96,22 @@ impl VideoDecoder {
             }
 
             // Feed the next video packet; skip non-video packets (audio, subtitles)
-            loop {
-                match self.input_ctx.packets().next() {
-                    Some((stream, packet)) => {
-                        if stream.index() == self.video_stream_idx {
-                            self.decoder.send_packet(&packet)
-                                .map_err(|e| format!("send_packet: {e}"))?;
+            if !self.flushed {
+                loop {
+                    match self.input_ctx.packets().next() {
+                        Some((stream, packet)) => {
+                            if stream.index() == self.video_stream_idx {
+                                self.decoder.send_packet(&packet)
+                                    .map_err(|e| format!("send_packet: {e}"))?;
+                                break;
+                            }
+                        }
+                        None => {
+                            self.decoder.send_eof()
+                                .map_err(|e| format!("send_eof: {e}"))?;
+                            self.flushed = true;
                             break;
                         }
-                        // Non-video packet — read next
-                    }
-                    None => {
-                        // File EOF — flush buffered frames
-                        self.decoder.send_eof()
-                            .map_err(|e| format!("send_eof: {e}"))?;
-                        break;
                     }
                 }
             }
@@ -133,6 +136,7 @@ impl VideoDecoder {
         }
         self.decoder.flush();
         self.finished = false;
+        self.flushed = false;
         Ok(())
     }
 
@@ -149,6 +153,7 @@ impl VideoDecoder {
         self.decoder.flush();
         self.current_pts = 0;
         self.finished = false;
+        self.flushed = false;
         self.playing = true;
         Ok(())
     }
