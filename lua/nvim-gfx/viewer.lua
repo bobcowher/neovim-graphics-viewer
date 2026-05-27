@@ -169,6 +169,7 @@ end
 function M.close()
     if state.job_id then
         send({ cmd = "quit" })
+        vim.fn.jobwait({ state.job_id }, 200)
         vim.fn.jobstop(state.job_id)
     end
     cleanup()

@@ -38,6 +38,7 @@ struct App {
     image: Option<image::DynamicImage>,
     video: Option<VideoState>,
     current_path: Option<String>,
+    last_rgba: Option<(Vec<u8>, u32, u32)>,
 }
 
 impl App {
@@ -51,6 +52,7 @@ impl App {
             image: None,
             video: None,
             current_path: None,
+            last_rgba: None,
         }
     }
 
@@ -75,6 +77,7 @@ impl App {
                             next_frame_time: Instant::now(),
                         });
                         self.image = None;
+                        self.last_rgba = None;
                         self.kitty.reset();
                         emit(Event::Ready);
                     }
@@ -143,6 +146,8 @@ impl App {
             let rgba = img.to_rgba8();
             let (w, h) = rgba.dimensions();
             self.kitty.display(rgba.as_raw(), w, h, self.col, self.row, self.width, self.height)?;
+        } else if let Some((ref rgba, w, h)) = self.last_rgba {
+            self.kitty.display(rgba, w, h, self.col, self.row, self.width, self.height)?;
         }
         Ok(())
     }
@@ -194,6 +199,7 @@ fn main() {
                 match app.video.as_mut().unwrap().decoder.next_frame() {
                     Ok(Some(pixels)) => {
                         let rgba = xrgb_to_rgba(&pixels);
+                        app.last_rgba = Some((rgba.clone(), w, h));
                         let (col, row, width, height) =
                             (app.col, app.row, app.width, app.height);
                         if let Err(e) = app.kitty.display(&rgba, w, h, col, row, width, height) {

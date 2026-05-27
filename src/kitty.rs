@@ -101,9 +101,8 @@ pub fn xrgb_to_rgba(pixels: &[u32]) -> Vec<u8> {
 fn open_tty() -> Result<Box<dyn Write>, String> {
     match OpenOptions::new().write(true).open("/dev/tty") {
         Ok(f) => Ok(Box::new(f)),
-        Err(_) => {
-            // No controlling terminal (e.g. piped test). Fall back to stdout so
-            // Kitty bytes are written somewhere and commands don't fail.
+        Err(e) => {
+            eprintln!("nvim-gfx: cannot open /dev/tty ({e}), falling back to stdout");
             Ok(Box::new(std::io::stdout()))
         }
     }
