@@ -60,6 +60,14 @@ local function on_stdout(_, data, _)
     end
 end
 
+local function on_stderr(_, data, _)
+    for _, line in ipairs(data) do
+        if line ~= "" then
+            vim.notify("nvim-gfx: " .. line, vim.log.levels.WARN)
+        end
+    end
+end
+
 local function on_exit(_, code, _)
     if code ~= 0 then
         vim.notify("nvim-gfx: binary exited with code " .. code, vim.log.levels.WARN)
@@ -142,10 +150,16 @@ function M.open(path)
         set_image_keymaps(bufnr)
     end
 
+    -- When spawned via jobstart, the child has no controlling terminal,
+    -- so /dev/tty fails. Resolve Neovim's own stdout fd to get the real pts path.
+    local nvim_tty = vim.fn.resolve("/proc/" .. vim.fn.getpid() .. "/fd/1")
+
     state.job_id = vim.fn.jobstart({ bin }, {
         on_stdout       = on_stdout,
+        on_stderr       = on_stderr,
         on_exit         = on_exit,
         stdout_buffered = false,
+        env             = { NVIM_GFX_TTY = nvim_tty },
     })
 
     local geo = geometry.win_geometry(state.winid)

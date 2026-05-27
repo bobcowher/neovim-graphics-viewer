@@ -99,6 +99,17 @@ pub fn xrgb_to_rgba(pixels: &[u32]) -> Vec<u8> {
 }
 
 fn open_tty() -> Result<Box<dyn Write>, String> {
+    // When spawned by Neovim jobstart the child has no controlling terminal,
+    // so /dev/tty returns ENXIO. The Lua plugin passes Neovim's own stdout
+    // fd path (the real pts device) via this env var.
+    if let Ok(path) = std::env::var("NVIM_GFX_TTY") {
+        if !path.is_empty() {
+            match OpenOptions::new().write(true).open(&path) {
+                Ok(f) => return Ok(Box::new(f)),
+                Err(e) => eprintln!("nvim-gfx: cannot open NVIM_GFX_TTY={path}: {e}"),
+            }
+        }
+    }
     match OpenOptions::new().write(true).open("/dev/tty") {
         Ok(f) => Ok(Box::new(f)),
         Err(e) => {
