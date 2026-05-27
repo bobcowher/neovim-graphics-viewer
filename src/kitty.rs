@@ -203,8 +203,9 @@ mod tests {
         // Pan far right — crop should clamp to right edge, not get stuck at 0.9
         for _ in 0..30 { r.pan(1, 0); }
         // With a 100-pixel-wide image: visible_w=25, max_cx=75
-        // pan_x should be >= 3.0 now (30 * 0.1), which allows reaching max_cx
-        assert!(r.pan_x >= 3.0);
+        // pan_x should be ~3.0 now (30 * 0.1f32), which allows reaching max_cx.
+        // Use 2.9 to avoid floating-point accumulation drift.
+        assert!(r.pan_x >= 2.9);
     }
 
     #[test]
