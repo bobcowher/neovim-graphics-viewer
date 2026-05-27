@@ -1,4 +1,3 @@
-use std::fs::OpenOptions;
 use std::io::Write;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
@@ -54,10 +53,9 @@ impl KittyRenderer {
     }
 
     /// Remove the current Kitty image placement.
+    /// Writes the delete sequence to stdout with a SOH prefix so Lua can forward it to the terminal.
     pub fn clear() -> Result<(), String> {
-        let mut tty = open_tty()?;
-        write!(tty, "\x1b_Ga=d,d=i,i=1\x1b\\").map_err(|e| format!("tty write: {e}"))?;
-        tty.flush().map_err(|e| format!("tty flush: {e}"))
+        write_terminal_line(b"\x1b_Ga=d,d=i,i=1\x1b\\")
     }
 
     fn crop(&self, pixels: &[u8], w: u32, h: u32) -> (u32, u32, Vec<u8>) {
@@ -98,25 +96,17 @@ pub fn xrgb_to_rgba(pixels: &[u32]) -> Vec<u8> {
     out
 }
 
-fn open_tty() -> Result<Box<dyn Write>, String> {
-    // When spawned by Neovim jobstart the child has no controlling terminal,
-    // so /dev/tty returns ENXIO. The Lua plugin passes Neovim's own stdout
-    // fd path (the real pts device) via this env var.
-    if let Ok(path) = std::env::var("NVIM_GFX_TTY") {
-        if !path.is_empty() {
-            match OpenOptions::new().write(true).open(&path) {
-                Ok(f) => return Ok(Box::new(f)),
-                Err(e) => eprintln!("nvim-gfx: cannot open NVIM_GFX_TTY={path}: {e}"),
-            }
-        }
-    }
-    match OpenOptions::new().write(true).open("/dev/tty") {
-        Ok(f) => Ok(Box::new(f)),
-        Err(e) => {
-            eprintln!("nvim-gfx: cannot open /dev/tty ({e}), falling back to stdout");
-            Ok(Box::new(std::io::stdout()))
-        }
-    }
+/// Write a terminal escape sequence to stdout, prefixed with SOH (\x01) so the
+/// Lua on_stdout handler can distinguish it from JSON events and forward it
+/// directly to the terminal via io.write().  Ends with a newline so Neovim
+/// delivers it as one complete line to the callback.
+fn write_terminal_line(seq: &[u8]) -> Result<(), String> {
+    let stdout = std::io::stdout();
+    let mut out = stdout.lock();
+    out.write_all(b"\x01").map_err(|e| format!("stdout prefix: {e}"))?;
+    out.write_all(seq).map_err(|e| format!("stdout seq: {e}"))?;
+    out.write_all(b"\n").map_err(|e| format!("stdout newline: {e}"))?;
+    out.flush().map_err(|e| format!("stdout flush: {e}"))
 }
 
 fn write_kitty(
@@ -128,11 +118,11 @@ fn write_kitty(
     dest_cols: u32,
     dest_rows: u32,
 ) -> Result<(), String> {
-    let mut tty = open_tty()?;
+    let mut buf: Vec<u8> = Vec::new();
 
     // Save cursor position, then move to image origin
-    write!(tty, "\x1b7\x1b[{};{}H", row + 1, col + 1)
-        .map_err(|e| format!("cursor position: {e}"))?;
+    write!(buf, "\x1b7\x1b[{};{}H", row + 1, col + 1)
+        .map_err(|e| format!("buf write: {e}"))?;
 
     let b64 = STANDARD.encode(pixels);
     let b64_bytes = b64.as_bytes();
@@ -143,18 +133,19 @@ fn write_kitty(
         let m = if i + 1 < total_chunks { 1 } else { 0 };
         if i == 0 {
             write!(
-                tty,
+                buf,
                 "\x1b_Ga=T,f=32,s={src_w},v={src_h},c={dest_cols},r={dest_rows},i=1,z=1,q=2,m={m};{chunk_str}\x1b\\"
             )
         } else {
-            write!(tty, "\x1b_Gm={m};{chunk_str}\x1b\\")
+            write!(buf, "\x1b_Gm={m};{chunk_str}\x1b\\")
         }
-        .map_err(|e| format!("kitty write chunk {i}: {e}"))?;
+        .map_err(|e| format!("buf write chunk {i}: {e}"))?;
     }
 
     // Restore cursor position
-    write!(tty, "\x1b8").map_err(|e| format!("cursor restore: {e}"))?;
-    tty.flush().map_err(|e| format!("tty flush: {e}"))
+    write!(buf, "\x1b8").map_err(|e| format!("buf cursor restore: {e}"))?;
+
+    write_terminal_line(&buf)
 }
 
 #[cfg(test)]

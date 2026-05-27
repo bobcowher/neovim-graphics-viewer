@@ -51,10 +51,16 @@ end
 local function on_stdout(_, data, _)
     for _, line in ipairs(data) do
         if line ~= "" then
-            local ok, ev = pcall(vim.json.decode, line)
-            if ok and type(ev) == "table" and ev.event == "error" then
-                vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
-                M.close()
+            if line:sub(1, 1) == "\x01" then
+                -- Terminal escape sequence from binary — write directly to the terminal.
+                io.write(line:sub(2))
+                io.flush()
+            else
+                local ok, ev = pcall(vim.json.decode, line)
+                if ok and type(ev) == "table" and ev.event == "error" then
+                    vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
+                    M.close()
+                end
             end
         end
     end
@@ -150,16 +156,11 @@ function M.open(path)
         set_image_keymaps(bufnr)
     end
 
-    -- When spawned via jobstart, the child has no controlling terminal,
-    -- so /dev/tty fails. Resolve Neovim's own stdout fd to get the real pts path.
-    local nvim_tty = vim.fn.resolve("/proc/" .. vim.fn.getpid() .. "/fd/1")
-
     state.job_id = vim.fn.jobstart({ bin }, {
         on_stdout       = on_stdout,
         on_stderr       = on_stderr,
         on_exit         = on_exit,
         stdout_buffered = false,
-        env             = { NVIM_GFX_TTY = nvim_tty },
     })
 
     local geo = geometry.win_geometry(state.winid)
