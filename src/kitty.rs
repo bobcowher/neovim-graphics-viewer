@@ -19,8 +19,8 @@ impl KittyRenderer {
 
     /// dx/dy are cell counts; each unit pans 10% of the visible area.
     pub fn pan(&mut self, dx: i32, dy: i32) {
-        self.pan_x = (self.pan_x + dx as f32 * 0.1).clamp(-0.9, 0.9);
-        self.pan_y = (self.pan_y + dy as f32 * 0.1).clamp(-0.9, 0.9);
+        self.pan_x += dx as f32 * 0.1;
+        self.pan_y += dy as f32 * 0.1;
     }
 
     pub fn reset(&mut self) {
@@ -43,6 +43,12 @@ impl KittyRenderer {
         dest_cols: u32,
         dest_rows: u32,
     ) -> Result<(), String> {
+        if pixels.len() != (src_w * src_h * 4) as usize {
+            return Err(format!(
+                "pixel buffer mismatch: got {}, expected {}x{}x4={}",
+                pixels.len(), src_w, src_h, src_w * src_h * 4
+            ));
+        }
         let (crop_w, crop_h, crop_data) = self.crop(pixels, src_w, src_h);
         write_kitty(&crop_data, crop_w, crop_h, col, row, dest_cols, dest_rows)
     }
@@ -110,7 +116,8 @@ fn write_kitty(
 ) -> Result<(), String> {
     let mut tty = open_tty()?;
 
-    write!(tty, "\x1b[{};{}H", row + 1, col + 1)
+    // Save cursor position, then move to image origin
+    write!(tty, "\x1b7\x1b[{};{}H", row + 1, col + 1)
         .map_err(|e| format!("cursor position: {e}"))?;
 
     let b64 = STANDARD.encode(pixels);
@@ -118,7 +125,7 @@ fn write_kitty(
     let total_chunks = (b64_bytes.len() + 4095) / 4096;
 
     for (i, chunk) in b64_bytes.chunks(4096).enumerate() {
-        let chunk_str = std::str::from_utf8(chunk).unwrap();
+        let chunk_str = std::str::from_utf8(chunk).unwrap(); // SAFETY: base64 output is ASCII
         let m = if i + 1 < total_chunks { 1 } else { 0 };
         if i == 0 {
             write!(
@@ -131,6 +138,8 @@ fn write_kitty(
         .map_err(|e| format!("kitty write chunk {i}: {e}"))?;
     }
 
+    // Restore cursor position
+    write!(tty, "\x1b8").map_err(|e| format!("cursor restore: {e}"))?;
     tty.flush().map_err(|e| format!("tty flush: {e}"))
 }
 
@@ -188,11 +197,14 @@ mod tests {
     }
 
     #[test]
-    fn pan_clamped() {
+    fn pan_large_zoom_can_reach_edge() {
         let mut r = KittyRenderer::new();
-        for _ in 0..20 { r.pan(1, 1); }
-        assert!(r.pan_x <= 0.9);
-        assert!(r.pan_y <= 0.9);
+        r.zoom_by(4.0); // zoom = 4x → visible = 25% of image
+        // Pan far right — crop should clamp to right edge, not get stuck at 0.9
+        for _ in 0..30 { r.pan(1, 0); }
+        // With a 100-pixel-wide image: visible_w=25, max_cx=75
+        // pan_x should be >= 3.0 now (30 * 0.1), which allows reaching max_cx
+        assert!(r.pan_x >= 3.0);
     }
 
     #[test]
