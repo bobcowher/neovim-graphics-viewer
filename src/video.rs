@@ -1,5 +1,5 @@
 use ffmpeg_next as ffmpeg;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 pub struct VideoDecoder {
     input_ctx: ffmpeg::format::context::Input,
@@ -9,11 +9,13 @@ pub struct VideoDecoder {
     time_base: ffmpeg::Rational,
     width: u32,
     height: u32,
-    frame_duration: Duration,
     pub playing: bool,
     pub finished: bool,
     current_pts: i64,
     flushed: bool,
+    stream_epoch: Instant,
+    epoch_set: bool,
+    pub duration_secs: f64,
 }
 
 impl VideoDecoder {
@@ -23,7 +25,14 @@ impl VideoDecoder {
         let input_ctx = ffmpeg::format::input(&path)
             .map_err(|e| format!("open {path}: {e}"))?;
 
-        let (video_stream_idx, time_base, frame_duration, codec_ctx) = {
+        let raw_duration = input_ctx.duration();
+        let duration_secs = if raw_duration > 0 {
+            raw_duration as f64 / ffmpeg::ffi::AV_TIME_BASE as f64
+        } else {
+            0.0
+        };
+
+        let (video_stream_idx, time_base, codec_ctx) = {
             let stream = input_ctx
                 .streams()
                 .best(ffmpeg::media::Type::Video)
@@ -31,13 +40,9 @@ impl VideoDecoder {
 
             let idx = stream.index();
             let tb = stream.time_base();
-            let r = stream.rate();
-            let fps = if r.numerator() == 0 { 30.0_f64 }
-                      else { r.numerator() as f64 / r.denominator() as f64 };
-            let dur = Duration::from_secs_f64(1.0 / fps);
             let ctx = ffmpeg::codec::context::Context::from_parameters(stream.parameters())
                 .map_err(|e| format!("codec context: {e}"))?;
-            (idx, tb, dur, ctx)
+            (idx, tb, ctx)
         };
 
         let decoder = codec_ctx.decoder().video()
@@ -50,7 +55,7 @@ impl VideoDecoder {
             decoder.format(),
             width,
             height,
-            ffmpeg::format::Pixel::RGB24,
+            ffmpeg::format::Pixel::RGBA,
             width,
             height,
             ffmpeg::software::scaling::Flags::BILINEAR,
@@ -64,17 +69,17 @@ impl VideoDecoder {
             time_base,
             width,
             height,
-            frame_duration,
             playing: true,
             finished: false,
             current_pts: 0,
             flushed: false,
+            stream_epoch: Instant::now(),
+            epoch_set: false,
+            duration_secs,
         })
     }
 
-    /// Decode and return the next video frame as XRGB pixels.
-    /// Returns Ok(None) at end-of-file (sets finished=true, playing=false).
-    pub fn next_frame(&mut self) -> Result<Option<Vec<u32>>, String> {
+    pub fn next_frame(&mut self) -> Result<Option<Vec<u8>>, String> {
         let mut frame = ffmpeg::frame::Video::empty();
 
         loop {
@@ -82,8 +87,16 @@ impl VideoDecoder {
                 Ok(()) => {
                     if let Some(pts) = frame.pts() {
                         self.current_pts = pts;
+                        if !self.epoch_set {
+                            let tb = f64::from(self.time_base);
+                            let pts_secs = pts as f64 * tb;
+                            self.stream_epoch = Instant::now()
+                                .checked_sub(Duration::from_secs_f64(pts_secs))
+                                .unwrap_or_else(Instant::now);
+                            self.epoch_set = true;
+                        }
                     }
-                    return Ok(Some(self.to_xrgb(&frame)?));
+                    return Ok(Some(self.to_rgba(&frame)?));
                 }
                 Err(ffmpeg::Error::Eof) => {
                     self.finished = true;
@@ -137,6 +150,7 @@ impl VideoDecoder {
         self.decoder.flush();
         self.finished = false;
         self.flushed = false;
+        self.epoch_set = false;
         Ok(())
     }
 
@@ -154,16 +168,22 @@ impl VideoDecoder {
         self.current_pts = 0;
         self.finished = false;
         self.flushed = false;
+        self.epoch_set = false;
         self.playing = true;
         Ok(())
     }
 
-    /// Toggle play/pause. If the video has finished, rewind and play.
     pub fn toggle_play(&mut self) {
         if self.finished {
             let _ = self.rewind();
+        } else if self.playing {
+            self.playing = false;
         } else {
-            self.playing = !self.playing;
+            self.playing = true;
+            self.stream_epoch = Instant::now()
+                .checked_sub(Duration::from_secs_f64(self.position_secs()))
+                .unwrap_or_else(Instant::now);
+            self.epoch_set = true;
         }
     }
 
@@ -171,9 +191,18 @@ impl VideoDecoder {
     pub fn is_finished(&self) -> bool { self.finished }
     pub fn width(&self) -> u32 { self.width }
     pub fn height(&self) -> u32 { self.height }
-    pub fn frame_duration(&self) -> Duration { self.frame_duration }
 
-    fn to_xrgb(&mut self, frame: &ffmpeg::frame::Video) -> Result<Vec<u32>, String> {
+    pub fn current_display_time(&self) -> Instant {
+        let tb = f64::from(self.time_base);
+        let secs = self.current_pts as f64 * tb;
+        self.stream_epoch + Duration::from_secs_f64(secs)
+    }
+
+    pub fn position_secs(&self) -> f64 {
+        self.current_pts as f64 * f64::from(self.time_base)
+    }
+
+    fn to_rgba(&mut self, frame: &ffmpeg::frame::Video) -> Result<Vec<u8>, String> {
         let mut rgb = ffmpeg::frame::Video::empty();
         self.scaler.run(frame, &mut rgb)
             .map_err(|e| format!("scale: {e}"))?;
@@ -182,17 +211,12 @@ impl VideoDecoder {
         let h = self.height as usize;
         let stride = rgb.stride(0);
         let data = rgb.data(0);
-        let mut pixels = Vec::with_capacity(w * h);
+        let mut pixels = Vec::with_capacity(w * h * 4);
 
         for y in 0..h {
-            for x in 0..w {
-                let i = y * stride + x * 3;
-                pixels.push(
-                    ((data[i] as u32) << 16)
-                        | ((data[i + 1] as u32) << 8)
-                        | data[i + 2] as u32,
-                );
-            }
+            let row = y * stride;
+            let len = w * 4;
+            pixels.extend_from_slice(&data[row..row + len]);
         }
         Ok(pixels)
     }

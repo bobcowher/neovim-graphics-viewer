@@ -17,6 +17,7 @@ pub enum Command {
 #[serde(tag = "event", rename_all = "snake_case")]
 pub enum Event {
     Ready,
+    Time { position: f64, duration: f64, playing: bool },
     Error { msg: String },
 }
 

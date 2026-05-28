@@ -1,3 +1,7 @@
 /target/
 .superpowers/
 .claude/
+opencode.json
+*.mp4
+*.png
+*.md

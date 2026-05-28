@@ -6,7 +6,7 @@ use std::io::BufRead;
 use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
-use kitty::{xrgb_to_rgba, KittyRenderer};
+use kitty::KittyRenderer;
 use protocol::{Command, Event};
 use video::VideoDecoder;
 
@@ -24,9 +24,30 @@ fn emit(event: Event) {
     println!("{json}");
 }
 
+fn emit_time(vs: &mut VideoState) {
+    let now = Instant::now();
+    if now.duration_since(vs.last_time_emit) >= Duration::from_millis(900) {
+        vs.last_time_emit = now;
+        emit(Event::Time {
+            position: vs.decoder.position_secs(),
+            duration: vs.decoder.duration_secs,
+            playing: vs.decoder.is_playing(),
+        });
+    }
+}
+
+fn force_emit_time(vs: &mut VideoState) {
+    vs.last_time_emit = Instant::now();
+    emit(Event::Time {
+        position: vs.decoder.position_secs(),
+        duration: vs.decoder.duration_secs,
+        playing: vs.decoder.is_playing(),
+    });
+}
+
 struct VideoState {
     decoder: VideoDecoder,
-    next_frame_time: Instant,
+    last_time_emit: Instant,
 }
 
 struct App {
@@ -39,6 +60,8 @@ struct App {
     video: Option<VideoState>,
     current_path: Option<String>,
     last_rgba: Option<(Vec<u8>, u32, u32)>,
+    last_display_w: u32,
+    last_display_h: u32,
 }
 
 impl App {
@@ -53,6 +76,8 @@ impl App {
             video: None,
             current_path: None,
             last_rgba: None,
+            last_display_w: 0,
+            last_display_h: 0,
         }
     }
 
@@ -74,14 +99,18 @@ impl App {
                         self.current_path = Some(path);
                         self.video = Some(VideoState {
                             decoder,
-                            next_frame_time: Instant::now(),
+                            last_time_emit: Instant::now(),
                         });
                         self.image = None;
                         self.last_rgba = None;
                         self.kitty.reset();
                         emit(Event::Ready);
                     }
-                    // On resize: width/height updated above; next frame renders at new size.
+                    if !need_open && (width != self.last_display_w || height != self.last_display_h) {
+                        self.kitty.clear()?;
+                    }
+                    self.last_display_w = width;
+                    self.last_display_h = height;
                 } else {
                     if need_open {
                         let img = image::open(&path)
@@ -91,6 +120,11 @@ impl App {
                         self.video = None;
                         self.kitty.reset();
                     }
+                    if !need_open && (width != self.last_display_w || height != self.last_display_h) {
+                        self.kitty.clear()?;
+                    }
+                    self.last_display_w = width;
+                    self.last_display_h = height;
                     self.display_image()?;
                     emit(Event::Ready);
                 }
@@ -101,36 +135,34 @@ impl App {
                 self.display_image()?;
                 Ok(false)
             }
-            Command::Pan { dx, dy } => {
-                self.kitty.pan(dx, dy);
+            Command::Reset => {
+                self.kitty.reset();
                 self.display_image()?;
                 Ok(false)
             }
-            Command::Reset => {
-                self.kitty.reset();
+            Command::Pan { dx, dy } => {
+                self.kitty.pan(dx, dy);
                 self.display_image()?;
                 Ok(false)
             }
             Command::PlayPause => {
                 if let Some(ref mut vs) = self.video {
                     vs.decoder.toggle_play();
-                    if vs.decoder.is_playing() {
-                        vs.next_frame_time = Instant::now();
-                    }
+                    force_emit_time(vs);
                 }
                 Ok(false)
             }
             Command::Seek { delta } => {
                 if let Some(ref mut vs) = self.video {
                     vs.decoder.seek(delta)?;
-                    vs.next_frame_time = Instant::now();
+                    force_emit_time(vs);
                 }
                 Ok(false)
             }
             Command::Rewind => {
                 if let Some(ref mut vs) = self.video {
                     vs.decoder.rewind()?;
-                    vs.next_frame_time = Instant::now();
+                    force_emit_time(vs);
                 }
                 Ok(false)
             }
@@ -190,27 +222,32 @@ fn main() {
 
         if active {
             let now = Instant::now();
-            let next = app.video.as_ref().unwrap().next_frame_time;
-            if now >= next {
+            let display_time = app.video.as_ref().unwrap().decoder.current_display_time();
+            if now >= display_time {
                 let (w, h) = {
                     let vs = app.video.as_ref().unwrap();
                     (vs.decoder.width(), vs.decoder.height())
                 };
-                match app.video.as_mut().unwrap().decoder.next_frame() {
-                    Ok(Some(pixels)) => {
-                        let rgba = xrgb_to_rgba(&pixels);
-                        app.last_rgba = Some((rgba.clone(), w, h));
-                        let (col, row, width, height) =
-                            (app.col, app.row, app.width, app.height);
-                        if let Err(e) = app.kitty.display(&rgba, w, h, col, row, width, height) {
-                            emit(Event::Error { msg: e });
-                            return;
+                loop {
+                    match app.video.as_mut().unwrap().decoder.next_frame() {
+                        Ok(Some(rgba)) => {
+                            let frame_dt = app.video.as_ref().unwrap().decoder.current_display_time();
+                            if Instant::now() >= frame_dt {
+                                continue;
+                            }
+                            app.last_rgba = Some((rgba.clone(), w, h));
+                            let (col, row, width, height) =
+                                (app.col, app.row, app.width, app.height);
+                            if let Err(e) = app.kitty.display(&rgba, w, h, col, row, width, height) {
+                                emit(Event::Error { msg: e });
+                                return;
+                            }
+                            emit_time(app.video.as_mut().unwrap());
+                            break;
                         }
-                        let dur = app.video.as_ref().unwrap().decoder.frame_duration();
-                        app.video.as_mut().unwrap().next_frame_time = now + dur;
+                        Ok(None) => { break; }
+                        Err(e) => { emit(Event::Error { msg: e }); return; }
                     }
-                    Ok(None) => {}
-                    Err(e) => { emit(Event::Error { msg: e }); return; }
                 }
             }
             std::thread::sleep(Duration::from_millis(1));

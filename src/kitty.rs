@@ -2,6 +2,8 @@ use std::io::Write;
 use std::fs::File;
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 
+const KITTY_IMAGE_ID: u32 = 31337;
+
 pub struct KittyRenderer {
     pub zoom: f32,
     pub pan_x: f32,
@@ -21,12 +23,12 @@ impl KittyRenderer {
             }
             Err(_) => Box::new(std::io::stdout()),
         };
-        Self { zoom: 1.0, pan_x: 0.0, pan_y: 0.0, writer }
+        Self { zoom: 0.8, pan_x: 0.0, pan_y: 0.0, writer }
     }
 
     #[cfg(test)]
     fn new_test() -> Self {
-        Self { zoom: 1.0, pan_x: 0.0, pan_y: 0.0, writer: Box::new(Vec::new()) }
+        Self { zoom: 0.8, pan_x: 0.0, pan_y: 0.0, writer: Box::new(Vec::new()) }
     }
 
     pub fn zoom_by(&mut self, factor: f32) {
@@ -39,7 +41,7 @@ impl KittyRenderer {
     }
 
     pub fn reset(&mut self) {
-        self.zoom = 1.0;
+        self.zoom = 0.8;
         self.pan_x = 0.0;
         self.pan_y = 0.0;
     }
@@ -60,12 +62,36 @@ impl KittyRenderer {
                 pixels.len(), src_w, src_h, src_w * src_h * 4
             ));
         }
-        let (crop_w, crop_h, crop_data) = self.crop(pixels, src_w, src_h);
-        write_kitty(&mut *self.writer, &crop_data, crop_w, crop_h, col, row, dest_cols, dest_rows)
+        if self.zoom >= 1.0 {
+            let (crop_w, crop_h, crop_data) = self.crop(pixels, src_w, src_h);
+            write_kitty(&mut *self.writer, &crop_data, crop_w, crop_h, col, row, dest_cols, dest_rows)
+        } else {
+            let z = self.zoom;
+            let new_w = ((src_w as f32 * z).round() as u32).max(1);
+            let new_h = ((src_h as f32 * z).round() as u32).max(1);
+            let scaled = image::imageops::resize(
+                &image::RgbaImage::from_raw(src_w, src_h, pixels.to_vec())
+                    .ok_or("invalid image")?,
+                new_w,
+                new_h,
+                image::imageops::FilterType::Triangle,
+            );
+            let scaled_raw = scaled.as_raw();
+            let mut padded = vec![0u8; (src_w * src_h * 4) as usize];
+            let x_off = ((src_w - new_w) / 2) as usize;
+            let y_off = ((src_h - new_h) / 2) as usize;
+            for y in 0..new_h as usize {
+                let src_row = y * new_w as usize * 4;
+                let dst_row = ((y_off + y) * src_w as usize + x_off) * 4;
+                let len = new_w as usize * 4;
+                padded[dst_row..dst_row + len].copy_from_slice(&scaled_raw[src_row..src_row + len]);
+            }
+            write_kitty(&mut *self.writer, &padded, src_w, src_h, col, row, dest_cols, dest_rows)
+        }
     }
 
     pub fn clear(&mut self) -> Result<(), String> {
-        write_terminal_line(&mut *self.writer, b"\x1b_Ga=d,d=i,i=1\x1b\\")
+        write_terminal_line(&mut *self.writer, format!("\x1b_Ga=d,d=i,i={KITTY_IMAGE_ID}\x1b\\").as_bytes())
     }
 
     fn crop(&self, pixels: &[u8], w: u32, h: u32) -> (u32, u32, Vec<u8>) {
@@ -92,18 +118,6 @@ impl KittyRenderer {
         }
         (visible_w, visible_h, out)
     }
-}
-
-/// Convert XRGB u32 pixels (0x00RRGGBB) to RGBA u8 bytes (alpha = 255).
-pub fn xrgb_to_rgba(pixels: &[u32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(pixels.len() * 4);
-    for &p in pixels {
-        out.push(((p >> 16) & 0xFF) as u8);
-        out.push(((p >> 8) & 0xFF) as u8);
-        out.push((p & 0xFF) as u8);
-        out.push(255);
-    }
-    out
 }
 
 fn write_terminal_line(writer: &mut dyn Write, seq: &[u8]) -> Result<(), String> {
@@ -136,7 +150,7 @@ fn write_kitty(
         if i == 0 {
             write!(
                 buf,
-                "\x1b_Ga=T,f=32,s={src_w},v={src_h},c={dest_cols},r={dest_rows},i=1,q=2,m={m};{chunk_str}\x1b\\"
+                "\x1b_Ga=T,f=32,s={src_w},v={src_h},c={dest_cols},r={dest_rows},i={KITTY_IMAGE_ID},q=2,m={m};{chunk_str}\x1b\\"
             )
         } else {
             write!(buf, "\x1b_Gm={m};{chunk_str}\x1b\\")
@@ -156,7 +170,7 @@ mod tests {
     #[test]
     fn initial_state() {
         let r = KittyRenderer::new_test();
-        assert!((r.zoom - 1.0).abs() < 0.001);
+        assert!((r.zoom - 0.8).abs() < 0.001);
         assert_eq!(r.pan_x, 0.0);
         assert_eq!(r.pan_y, 0.0);
     }
@@ -166,7 +180,7 @@ mod tests {
         let mut r = KittyRenderer::new_test();
         r.zoom_by(2.0);
         r.zoom_by(1.5);
-        assert!((r.zoom - 3.0).abs() < 0.001);
+        assert!((r.zoom - 2.4).abs() < 0.001);
     }
 
     #[test]
@@ -189,7 +203,7 @@ mod tests {
         r.zoom_by(3.0);
         r.pan(5, 3);
         r.reset();
-        assert!((r.zoom - 1.0).abs() < 0.001);
+        assert!((r.zoom - 0.8).abs() < 0.001);
         assert_eq!(r.pan_x, 0.0);
         assert_eq!(r.pan_y, 0.0);
     }
@@ -226,9 +240,9 @@ mod tests {
         r.zoom_by(2.0);
         let pixels = vec![1u8; 4 * 4 * 4];
         let (w, h, out) = r.crop(&pixels, 4, 4);
-        assert_eq!(w, 2);
-        assert_eq!(h, 2);
-        assert_eq!(out.len(), 2 * 2 * 4);
+        assert_eq!(w, 3);
+        assert_eq!(h, 3);
+        assert_eq!(out.len(), 3 * 3 * 4);
     }
 
     #[test]
@@ -241,16 +255,5 @@ mod tests {
         assert!(h >= 1);
     }
 
-    #[test]
-    fn xrgb_to_rgba_converts_correctly() {
-        let xrgb = vec![0x00FF8040u32];
-        let rgba = xrgb_to_rgba(&xrgb);
-        assert_eq!(rgba, vec![255, 128, 64, 255]);
-    }
 
-    #[test]
-    fn xrgb_to_rgba_black() {
-        let rgba = xrgb_to_rgba(&[0u32]);
-        assert_eq!(rgba, vec![0, 0, 0, 255]);
-    }
 }

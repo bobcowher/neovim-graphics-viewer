@@ -5,12 +5,14 @@ local M = {}
 local VIDEO_EXTS = { mp4=true, mkv=true, webm=true, avi=true, mov=true, m4v=true }
 
 local state = {
-    job_id     = nil,
-    bufnr      = nil,
-    orig_bufnr = nil,
-    winid      = nil,
-    aug_id     = nil,
-    path       = nil,
+    job_id       = nil,
+    bufnr        = nil,
+    orig_bufnr   = nil,
+    winid        = nil,
+    aug_id       = nil,
+    path         = nil,
+    redraw_timer = nil,
+    last_geo     = nil,
 }
 
 local function is_video(path)
@@ -26,11 +28,43 @@ end
 
 local function send(cmd)
     if state.job_id then
-        vim.fn.chansend(state.job_id, vim.json.encode(cmd) .. "\n")
+        local sent = vim.fn.chansend(state.job_id, vim.json.encode(cmd) .. "\n")
+        if sent == 0 then
+            vim.notify("nvim-gfx: chansend failed!", vim.log.levels.WARN)
+        end
     end
 end
 
+local function schedule_redraw()
+    if state.redraw_timer then
+        vim.loop.timer_stop(state.redraw_timer)
+        state.redraw_timer:close()
+    end
+    state.redraw_timer = vim.loop.new_timer()
+    state.redraw_timer:start(100, 100, function()
+        vim.schedule(function()
+            if state.job_id and state.winid and vim.api.nvim_win_is_valid(state.winid) then
+                local g = geometry.win_geometry(state.winid)
+                local prev = state.last_geo
+                if not prev or g.row ~= prev.row or g.col ~= prev.col
+                    or g.width ~= prev.width or g.height ~= prev.height
+                then
+                    state.last_geo = { row = g.row, col = g.col, width = g.width, height = g.height }
+                    send({ cmd = "show", path = state.path,
+                           row = g.row, col = g.col,
+                           width = g.width, height = g.height })
+                end
+            end
+        end)
+    end)
+end
+
 local function cleanup()
+    if state.redraw_timer then
+        vim.loop.timer_stop(state.redraw_timer)
+        state.redraw_timer:close()
+        state.redraw_timer = nil
+    end
     if state.aug_id then
         pcall(vim.api.nvim_del_augroup_by_id, state.aug_id)
         state.aug_id = nil
@@ -41,20 +75,34 @@ local function cleanup()
     if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
         vim.api.nvim_buf_delete(state.bufnr, { force = true })
     end
-    state.job_id     = nil
-    state.bufnr      = nil
-    state.orig_bufnr = nil
-    state.winid      = nil
-    state.path       = nil
+    state.job_id       = nil
+    state.bufnr        = nil
+    state.orig_bufnr   = nil
+    state.winid        = nil
+    state.path         = nil
+    state.last_geo     = nil
+end
+
+local function fmt_time(secs)
+    local m = math.floor(secs / 60)
+    local s = math.floor(secs % 60)
+    return string.format("%02d:%02d", m, s)
 end
 
 local function on_stdout(_, data, _)
     for _, line in ipairs(data) do
         if line ~= "" then
             local ok, ev = pcall(vim.json.decode, line)
-            if ok and type(ev) == "table" and ev.event == "error" then
-                vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
-                M.close()
+            if ok and type(ev) == "table" then
+                if ev.event == "error" then
+                    vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
+                    M.close()
+                elseif ev.event == "time" and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+                    local status = ev.playing and "playing" or "paused"
+                    local pos = fmt_time(ev.position)
+                    local dur = (ev.duration or 0) > 0 and fmt_time(ev.duration) or "--:--"
+                    pcall(vim.api.nvim_buf_set_name, state.bufnr, status .. " " .. pos .. " / " .. dur)
+                end
             end
         end
     end
@@ -77,11 +125,11 @@ end
 
 local function set_image_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
-    vim.keymap.set("n", "q",        function() M.close() end, o)
-    vim.keymap.set("n", "+",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "=",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "-",        function() send({ cmd = "zoom", factor = 0.8  }) end, o)
-    vim.keymap.set("n", "r",        function() send({ cmd = "reset" }) end, o)
+    vim.keymap.set("n", "q",   function() M.close() end, o)
+    vim.keymap.set("n", "+",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "-",   function() send({ cmd = "zoom", factor = 0.8  }) end, o)
+    vim.keymap.set("n", "=",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "r",   function() send({ cmd = "reset" }) end, o)
     vim.keymap.set("n", "h",        function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
     vim.keymap.set("n", "<Left>",   function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
     vim.keymap.set("n", "l",        function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
@@ -105,10 +153,10 @@ local function set_video_keymaps(bufnr)
     vim.keymap.set("n", "<Down>",   function() send({ cmd = "seek", delta = -10 }) end, o)
     vim.keymap.set("n", "k",        function() send({ cmd = "seek", delta =  10 }) end, o)
     vim.keymap.set("n", "<Up>",     function() send({ cmd = "seek", delta =  10 }) end, o)
-    vim.keymap.set("n", "+",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "=",        function() send({ cmd = "zoom", factor = 1.25 }) end, o)
-    vim.keymap.set("n", "-",        function() send({ cmd = "zoom", factor = 0.8  }) end, o)
-    vim.keymap.set("n", "r",        function() send({ cmd = "rewind" }) end, o)
+    vim.keymap.set("n", "+",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "-",   function() send({ cmd = "zoom", factor = 0.8  }) end, o)
+    vim.keymap.set("n", "=",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "r",   function() send({ cmd = "rewind" }) end, o)
 end
 
 function M.open(path)
@@ -136,10 +184,14 @@ function M.open(path)
     vim.bo[bufnr].bufhidden  = "wipe"
     vim.bo[bufnr].filetype   = "nvim-gfx"
     vim.bo[bufnr].modifiable = false
+    vim.wo[state.winid].number = false
+    vim.wo[state.winid].relativenumber = false
+    vim.wo[state.winid].signcolumn = "no"
 
     -- Wipe the original image buffer immediately so no other plugin can find
     -- and load the raw binary content into any window.
-    if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
+    local orig_name = vim.api.nvim_buf_get_name(state.orig_bufnr)
+    if orig_name ~= "" and orig_name:match("%.(png|jpg|jpeg|webp|mp4|mkv|webm|avi|mov|m4v)$") then
         pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
         state.orig_bufnr = nil
     end
@@ -150,8 +202,9 @@ function M.open(path)
         set_image_keymaps(bufnr)
     end
 
-    local tty = vim.fn.resolve("/proc/self/fd/1")
-    if tty == "" then
+    local is_macos = vim.loop.os_uname().sysname == "Darwin"
+    local tty = vim.fn.resolve(is_macos and "/dev/fd/1" or "/proc/self/fd/1")
+    if tty == "" or tty == "/dev/fd/1" or tty == "/proc/self/fd/1" then
         vim.notify("nvim-gfx: could not resolve TTY path", vim.log.levels.ERROR)
         return
     end
@@ -171,6 +224,10 @@ function M.open(path)
 
     local function on_resize()
         if not state.job_id then return end
+        if not vim.api.nvim_win_is_valid(state.winid) then
+            vim.schedule(function() M.close() end)
+            return
+        end
         local g = geometry.win_geometry(state.winid)
         send({ cmd = "show", path = state.path,
                row = g.row, col = g.col,
@@ -178,15 +235,22 @@ function M.open(path)
     end
 
     state.aug_id = vim.api.nvim_create_augroup("NvimGfxResize" .. bufnr, { clear = true })
-    vim.api.nvim_create_autocmd("VimResized", { group = state.aug_id, callback = on_resize })
-    vim.api.nvim_create_autocmd("WinResized", { group = state.aug_id, callback = on_resize })
+    vim.api.nvim_create_autocmd("VimResized",  { group = state.aug_id, callback = on_resize })
+    vim.api.nvim_create_autocmd("WinResized",  { group = state.aug_id, callback = on_resize })
+    vim.api.nvim_create_autocmd("CursorMoved", { group = state.aug_id, callback = schedule_redraw })
+    vim.api.nvim_create_autocmd("WinScrolled", { group = state.aug_id, callback = schedule_redraw })
+    vim.api.nvim_create_autocmd("WinEnter",    { group = state.aug_id, callback = schedule_redraw })
+    vim.api.nvim_create_autocmd("BufEnter",    { group = state.aug_id, callback = schedule_redraw })
+    vim.api.nvim_create_autocmd("ModeChanged", { group = state.aug_id, callback = schedule_redraw })
 end
 
 function M.close()
-    if state.job_id then
-        send({ cmd = "quit" })
-        vim.fn.jobwait({ state.job_id }, 200)
-        vim.fn.jobstop(state.job_id)
+    local jid = state.job_id
+    if jid then
+        state.job_id = nil
+        vim.fn.chansend(jid, vim.json.encode({ cmd = "quit" }) .. "\n")
+        vim.fn.jobwait({ jid }, 200)
+        pcall(vim.fn.jobstop, jid)
     end
     cleanup()
 end
