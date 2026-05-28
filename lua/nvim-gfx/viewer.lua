@@ -70,14 +70,10 @@ local function cleanup()
         state.aug_id = nil
     end
     if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
-        local b = state.orig_bufnr
-        state.orig_bufnr = nil
-        pcall(vim.api.nvim_buf_delete, b, { force = true })
+        pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
     end
     if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
-        local b = state.bufnr
-        state.bufnr = nil  -- nil before delete to prevent BufWipeout re-entrancy
-        pcall(vim.api.nvim_buf_delete, b, { force = true })
+        vim.api.nvim_buf_delete(state.bufnr, { force = true })
     end
     state.job_id       = nil
     state.bufnr        = nil
@@ -246,8 +242,6 @@ function M.open(path)
     vim.api.nvim_create_autocmd("WinEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("BufEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("ModeChanged", { group = state.aug_id, callback = schedule_redraw })
-    vim.api.nvim_create_autocmd("BufWipeout",  { group = state.aug_id, buf = bufnr,
-                                                  callback = function() M.close() end })
 end
 
 function M.close()
