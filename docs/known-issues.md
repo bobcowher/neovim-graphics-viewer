@@ -68,10 +68,20 @@ as nonsense in the buffer name.
 
 ## Resolved
 
-### 1. Image Disappears on Neovim Redraw ✓
+### 1. Image Disappears on Neovim Redraw ✓ (non-issue on Ghostty)
 
-Fixed: `Redraw` command added; Lua sends it on `CursorMoved`, `WinEnter`,
-`BufEnter`, `ModeChanged`, `WinScrolled` with 100ms debounce via `vim.loop` timer.
+In practice on Ghostty, this does not occur. Ghostty renders Kitty images in a
+virtual placement layer above the character grid — Neovim's TUI writing spaces or
+text over those cells has no effect on the image. This is correct Kitty protocol
+behavior.
+
+**Known minor quirk:** Command output (`:messages`, shell commands) appears overlaid
+on the image cells since it is the topmost visible layer. Not a bug — the message
+area has nowhere else to go.
+
+The `Redraw` command and the `schedule_redraw` debounce timer were added anyway and
+are harmless. They would matter on terminals that don't implement virtual placements
+correctly.
 
 ### 2. Video Frame Timing Drifts ✓
 
