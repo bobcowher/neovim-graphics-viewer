@@ -276,7 +276,7 @@ function M.open(path)
     vim.api.nvim_create_autocmd("ModeChanged", { group = state.aug_id, callback = schedule_redraw })
     -- The viewer buffer left its window (window closed, or a buffer replaced it
     -- in-place). bufhidden=wipe means this fires as the buffer is wiped. Tear
-    -- down the renderer; do NOT block here (jobstop is scheduled).
+    -- down the renderer; do NOT block here (jobstop is deferred as a fallback).
     vim.api.nvim_create_autocmd("BufWipeout", {
         group    = state.aug_id,
         buffer   = bufnr,
@@ -290,7 +290,12 @@ function M.open(path)
             if jid then
                 state.job_id = nil
                 vim.fn.chansend(jid, vim.json.encode({ cmd = "quit" }) .. "\n")
-                vim.schedule(function() pcall(vim.fn.jobstop, jid) end)
+                -- Let the binary process quit, clear the overlay, and exit on its
+                -- own (on_exit runs cleanup). Force-stop only as a late fallback:
+                -- stopping immediately races the clear, and with video the binary
+                -- is mid-frame when quit arrives, so it gets killed before it can
+                -- clear — leaving the image painted after :q!.
+                vim.defer_fn(function() pcall(vim.fn.jobstop, jid) end, 300)
             end
         end,
     })

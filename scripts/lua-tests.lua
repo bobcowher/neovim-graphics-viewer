@@ -226,6 +226,21 @@ vim.api.nvim_exec_autocmds("WinLeave", { buffer = ibuf })
 assert_true("  no play_pause for an image", find_cmd("play_pause") == nil)
 viewer.close()
 
+print("Test 13: closing the viewer window with :q! tears down the renderer")
+vim.cmd("only")
+local base13 = vim.api.nvim_create_buf(true, false)
+vim.api.nvim_win_set_buf(0, base13)
+vim.cmd("vsplit")
+reset_capture()
+viewer.open("/tmp/clip.mp4")
+local vbuf13 = vim.api.nvim_get_current_buf()
+-- Mimic the video status-line rename that on_stdout does for video.
+pcall(vim.api.nvim_buf_set_name, vbuf13, "playing 00:01 / 17:46")
+assert_true("  viewer active before close", viewer.is_active())
+reset_capture()
+vim.cmd("q!")
+assert_true("  quit sent on :q!", find_cmd("quit") ~= nil)
+
 vim.fn.jobstart    = orig_jobstart
 vim.fn.chansend    = orig_chansend
 vim.fn.jobwait     = orig_jobwait

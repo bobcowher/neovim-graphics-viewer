@@ -1,6 +1,26 @@
 use ffmpeg_next as ffmpeg;
 use std::time::{Duration, Instant};
 
+/// Cap the long edge of decoded video frames. Frames are downscaled to this in
+/// the swscale step, so every stage after it (RGBA buffer, base64, the bytes
+/// streamed to the terminal) carries proportionally less data. A terminal
+/// re-uploading a full-resolution frame ~30x/sec is the main CPU cost; sending
+/// preview-sized frames instead keeps it cheap. Tune here if needed.
+const MAX_VIDEO_EDGE: u32 = 960;
+
+/// Frame dimensions capped to MAX_VIDEO_EDGE on the long side, preserving aspect
+/// ratio and keeping both dimensions even (swscale prefers even sizes).
+fn capped_dims(w: u32, h: u32) -> (u32, u32) {
+    let long = w.max(h);
+    if long == 0 || long <= MAX_VIDEO_EDGE {
+        return (w, h);
+    }
+    let scale = MAX_VIDEO_EDGE as f64 / long as f64;
+    let nw = (((w as f64 * scale).round() as u32).max(2)) & !1;
+    let nh = (((h as f64 * scale).round() as u32).max(2)) & !1;
+    (nw, nh)
+}
+
 pub struct VideoDecoder {
     input_ctx: ffmpeg::format::context::Input,
     video_stream_idx: usize,
@@ -48,13 +68,17 @@ impl VideoDecoder {
         let decoder = codec_ctx.decoder().video()
             .map_err(|e| format!("video decoder: {e}"))?;
 
-        let width = decoder.width();
-        let height = decoder.height();
+        let src_w = decoder.width();
+        let src_h = decoder.height();
+        // Transmit/display size: capped so the terminal isn't fed more pixels
+        // per frame than a preview needs. width/height below are these capped
+        // dims — everything downstream (to_rgba, kitty transmit) uses them.
+        let (width, height) = capped_dims(src_w, src_h);
 
         let scaler = ffmpeg::software::scaling::Context::get(
             decoder.format(),
-            width,
-            height,
+            src_w,
+            src_h,
             ffmpeg::format::Pixel::RGBA,
             width,
             height,
@@ -232,5 +256,31 @@ mod tests {
         assert!(result.is_err());
         let msg = result.err().unwrap();
         assert!(msg.contains("/nonexistent/video.mp4"), "error should mention path, got: {msg}");
+    }
+
+    #[test]
+    fn capped_dims_leaves_small_frames_untouched() {
+        assert_eq!(capped_dims(480, 270), (480, 270));
+        assert_eq!(capped_dims(960, 540), (960, 540));
+    }
+
+    #[test]
+    fn capped_dims_scales_1080p_to_long_edge() {
+        // 1920x1080 -> long edge 960, aspect preserved (16:9 -> 960x540)
+        assert_eq!(capped_dims(1920, 1080), (960, 540));
+    }
+
+    #[test]
+    fn capped_dims_respects_portrait_long_edge() {
+        // tall frame: long edge is height
+        assert_eq!(capped_dims(1080, 1920), (540, 960));
+    }
+
+    #[test]
+    fn capped_dims_keeps_dimensions_even() {
+        let (w, h) = capped_dims(1999, 1001);
+        assert_eq!(w % 2, 0);
+        assert_eq!(h % 2, 0);
+        assert!(w.max(h) <= MAX_VIDEO_EDGE);
     }
 }

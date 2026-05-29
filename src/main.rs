@@ -206,6 +206,15 @@ fn main() {
 
     let mut app = App::new();
 
+    // Cap how often we transmit a video frame to the terminal. The terminal —
+    // not decoding — is the bottleneck: it re-parses and re-uploads a full frame
+    // every transmit. Decoding still tracks the source rate (playback position
+    // stays correct); we just skip painting frames that fall between ticks. Tune
+    // MAX_DRAW_FPS to trade smoothness for terminal CPU.
+    const MAX_DRAW_FPS: u64 = 15;
+    let min_draw_interval = Duration::from_micros(1_000_000 / MAX_DRAW_FPS);
+    let mut last_draw = Instant::now() - Duration::from_secs(1);
+
     loop {
         // Drain all pending commands before checking video frame.
         loop {
@@ -243,11 +252,17 @@ fn main() {
                                 continue;
                             }
                             app.last_rgba = Some((rgba.clone(), w, h));
-                            let (col, row, width, height) =
-                                (app.col, app.row, app.width, app.height);
-                            if let Err(e) = app.kitty.display(&rgba, w, h, col, row, width, height) {
-                                emit(Event::Error { msg: e });
-                                return;
+                            // Only paint if enough time has passed since the last
+                            // transmit (terminal-rate cap). Skipped frames still
+                            // advanced playback above; we just don't send them.
+                            if Instant::now().duration_since(last_draw) >= min_draw_interval {
+                                let (col, row, width, height) =
+                                    (app.col, app.row, app.width, app.height);
+                                if let Err(e) = app.kitty.display(&rgba, w, h, col, row, width, height) {
+                                    emit(Event::Error { msg: e });
+                                    return;
+                                }
+                                last_draw = Instant::now();
                             }
                             emit_time(app.video.as_mut().unwrap());
                             break;
