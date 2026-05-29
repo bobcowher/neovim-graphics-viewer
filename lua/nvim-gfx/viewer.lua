@@ -14,15 +14,10 @@ local state = {
     path         = nil,
     redraw_timer = nil,
     last_geo     = nil,
+    is_video     = false,
+    playing      = false,
+    auto_paused  = false,
 }
-
-local function dbg(msg)
-    local f = io.open("/tmp/nvim-gfx.log", "a")
-    if f then
-        f:write(os.date("%H:%M:%S ") .. msg .. "\n")
-        f:close()
-    end
-end
 
 local function is_video(path)
     local ext = path:match("%.(%w+)$")
@@ -95,6 +90,9 @@ local function cleanup()
     state.winid        = nil
     state.path         = nil
     state.last_geo     = nil
+    state.is_video     = false
+    state.playing      = false
+    state.auto_paused  = false
 end
 
 local function fmt_time(secs)
@@ -112,6 +110,7 @@ local function on_stdout(_, data, _)
                     vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
                     M.close("error_event")
                 elseif ev.event == "time" and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+                    state.playing = ev.playing == true
                     local status = ev.playing and "playing" or "paused"
                     local pos = fmt_time(ev.position)
                     local dur = (ev.duration or 0) > 0 and fmt_time(ev.duration) or "--:--"
@@ -175,7 +174,6 @@ end
 
 function M.open(path)
     path = vim.fn.expand(path)
-    dbg("M.open path=" .. tostring(path))
     if vim.fn.filereadable(path) == 0 then
         vim.notify("nvim-gfx: file not readable: " .. path, vim.log.levels.ERROR)
         return
@@ -192,7 +190,6 @@ function M.open(path)
             -- NvimTree's open_in_new_window fires BufReadPost twice for a
             -- single file open. Ignore the duplicate so we don't spawn a
             -- second renderer that races the first on the shared image ID.
-            dbg("M.open: duplicate open of same path, ignoring")
             return
         end
         M.close("open_reopen")
@@ -229,7 +226,9 @@ function M.open(path)
         end
     end
 
-    if is_video(path) then
+    state.is_video = is_video(path)
+    state.playing  = state.is_video   -- the binary auto-plays on open
+    if state.is_video then
         set_video_keymaps(bufnr)
     else
         set_image_keymaps(bufnr)
@@ -258,7 +257,6 @@ function M.open(path)
     local function on_resize()
         if not state.job_id then return end
         if not vim.api.nvim_win_is_valid(state.winid) then
-            dbg("on_resize: winid " .. tostring(state.winid) .. " INVALID -> close")
             vim.schedule(function() M.close("on_resize_invalid_win") end)
             return
         end
@@ -276,7 +274,6 @@ function M.open(path)
     vim.api.nvim_create_autocmd("WinEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("BufEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("ModeChanged", { group = state.aug_id, callback = schedule_redraw })
-    dbg("open: bufnr=" .. bufnr .. " winid=" .. state.winid)
     -- The viewer buffer left its window (window closed, or a buffer replaced it
     -- in-place). bufhidden=wipe means this fires as the buffer is wiped. Tear
     -- down the renderer; do NOT block here (jobstop is scheduled).
@@ -284,7 +281,6 @@ function M.open(path)
         group    = state.aug_id,
         buffer   = bufnr,
         callback = function()
-            dbg("BufWipeout fired, job_id=" .. tostring(state.job_id))
             if state.redraw_timer then
                 vim.loop.timer_stop(state.redraw_timer)
                 state.redraw_timer:close()
@@ -305,10 +301,36 @@ function M.open(path)
             if state.job_id then schedule_redraw() end
         end,
     })
+
+    -- Video only: pause playback when the viewer window loses focus. A playing
+    -- video redraws every frame, and each frame repositions the terminal
+    -- cursor; with focus elsewhere (e.g. the sidebar) that fights Neovim's
+    -- cursor and shows as rapid flicker. Auto-resume when focus returns.
+    if state.is_video then
+        vim.api.nvim_create_autocmd({ "WinLeave", "BufLeave" }, {
+            group    = state.aug_id,
+            buffer   = bufnr,
+            callback = function()
+                if state.job_id and state.playing and not state.auto_paused then
+                    state.auto_paused = true
+                    send({ cmd = "play_pause" })
+                end
+            end,
+        })
+        vim.api.nvim_create_autocmd({ "WinEnter", "BufEnter" }, {
+            group    = state.aug_id,
+            buffer   = bufnr,
+            callback = function()
+                if state.job_id and state.auto_paused then
+                    state.auto_paused = false
+                    send({ cmd = "play_pause" })
+                end
+            end,
+        })
+    end
 end
 
 function M.close(reason)
-    dbg("M.close called, reason=" .. tostring(reason) .. " job_id=" .. tostring(state.job_id))
     local jid = state.job_id
     if jid then
         state.job_id = nil
@@ -334,6 +356,19 @@ function M.close(reason)
     if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
         pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
     end
+
+    -- On explicit quit (q), if the NvimTree sidebar is open, bounce focus to it
+    -- instead of leaving the cursor in the now-empty viewer window. Other close
+    -- paths (opening another file, window closed) already land focus correctly.
+    if reason == "keymap_q_image" or reason == "keymap_q_video" then
+        for _, w in ipairs(vim.api.nvim_list_wins()) do
+            local wb = vim.api.nvim_win_get_buf(w)
+            if vim.api.nvim_buf_is_valid(wb) and vim.bo[wb].filetype == "NvimTree" then
+                pcall(vim.api.nvim_set_current_win, w)
+                break
+            end
+        end
+    end
 end
 
 -- Dedicated-viewer behavior: opening any other real file closes the image.
@@ -348,7 +383,6 @@ function M.on_other_buf(bufnr)
     local name = vim.api.nvim_buf_get_name(bufnr)
     if name == "" then return end
     if is_media(name) then return end       -- media opens are handled by M.open
-    dbg("on_other_buf: foreign file " .. name .. " -> close viewer")
     vim.schedule(function() M.close("other_file_opened") end)
 end
 
