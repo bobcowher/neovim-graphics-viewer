@@ -10,6 +10,7 @@ pub enum Command {
     PlayPause,
     Seek { delta: i32 },
     Rewind,
+    Clear,
     Quit,
 }
 

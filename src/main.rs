@@ -10,6 +10,22 @@ use kitty::KittyRenderer;
 use protocol::{Command, Event};
 use video::VideoDecoder;
 
+fn dbg(msg: &str) {
+    use std::io::Write;
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open("/tmp/nvim-gfx.log") {
+        let _ = writeln!(f, "{} bin: {}", chrono_like(), msg);
+    }
+}
+
+fn chrono_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let n = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let h = (n / 3600) % 24;
+    let m = (n / 60) % 60;
+    let s = n % 60;
+    format!("{:02}:{:02}:{:02}", h, m, s)
+}
+
 fn is_video_path(path: &str) -> bool {
     let ext = std::path::Path::new(path)
         .extension()
@@ -83,6 +99,7 @@ impl App {
 
     /// Returns true if the main loop should exit.
     fn handle(&mut self, cmd: Command) -> Result<bool, String> {
+        dbg(&format!("handle cmd: {:?}", cmd));
         match cmd {
             Command::Show { path, row, col, width, height } => {
                 self.row = row;
@@ -166,8 +183,16 @@ impl App {
                 }
                 Ok(false)
             }
+            Command::Clear => {
+                self.kitty.clear()?;
+                Ok(false)
+            }
             Command::Quit => {
-                let _ = self.kitty.clear();
+                dbg("handling Quit, calling kitty.clear()");
+                match self.kitty.clear() {
+                    Ok(_) => dbg("kitty.clear() OK"),
+                    Err(e) => dbg(&format!("kitty.clear() ERR: {e}")),
+                }
                 Ok(true)
             }
         }
@@ -186,6 +211,7 @@ impl App {
 }
 
 fn main() {
+    dbg(&format!("main: pid={}", std::process::id()));
     let (tx, rx) = mpsc::channel::<Command>();
 
     std::thread::spawn(move || {
@@ -212,7 +238,11 @@ fn main() {
                     Err(e) => { emit(Event::Error { msg: e }); return; }
                 },
                 Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return,
+                Err(TryRecvError::Disconnected) => {
+                    dbg("rx disconnected (try_recv), clearing and exiting");
+                    let _ = app.kitty.clear();
+                    return;
+                }
             }
         }
 
@@ -258,7 +288,11 @@ fn main() {
                     Ok(false) => {}
                     Err(e) => { emit(Event::Error { msg: e }); return; }
                 },
-                Err(_) => return,
+                Err(_) => {
+                    dbg("rx err (blocking recv), clearing and exiting");
+                    let _ = app.kitty.clear();
+                    return;
+                }
             }
         }
     }

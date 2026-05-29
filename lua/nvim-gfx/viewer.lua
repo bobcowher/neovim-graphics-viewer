@@ -3,6 +3,7 @@ local geometry = require("nvim-gfx.geometry")
 local M = {}
 
 local VIDEO_EXTS = { mp4=true, mkv=true, webm=true, avi=true, mov=true, m4v=true }
+local IMAGE_EXTS = { png=true, jpg=true, jpeg=true, webp=true, gif=true, bmp=true }
 
 local state = {
     job_id       = nil,
@@ -15,9 +16,28 @@ local state = {
     last_geo     = nil,
 }
 
+local function dbg(msg)
+    local f = io.open("/tmp/nvim-gfx.log", "a")
+    if f then
+        f:write(os.date("%H:%M:%S ") .. msg .. "\n")
+        f:close()
+    end
+end
+
 local function is_video(path)
     local ext = path:match("%.(%w+)$")
     return ext ~= nil and VIDEO_EXTS[ext:lower()] == true
+end
+
+local function is_media(path)
+    local ext = path:match("%.(%w+)$")
+    if not ext then return false end
+    ext = ext:lower()
+    return IMAGE_EXTS[ext] == true or VIDEO_EXTS[ext] == true
+end
+
+function M.is_active()
+    return state.job_id ~= nil
 end
 
 local function binary_path()
@@ -69,12 +89,6 @@ local function cleanup()
         pcall(vim.api.nvim_del_augroup_by_id, state.aug_id)
         state.aug_id = nil
     end
-    if state.orig_bufnr and vim.api.nvim_buf_is_valid(state.orig_bufnr) then
-        pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
-    end
-    if state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
-        vim.api.nvim_buf_delete(state.bufnr, { force = true })
-    end
     state.job_id       = nil
     state.bufnr        = nil
     state.orig_bufnr   = nil
@@ -96,7 +110,7 @@ local function on_stdout(_, data, _)
             if ok and type(ev) == "table" then
                 if ev.event == "error" then
                     vim.notify("nvim-gfx: " .. (ev.msg or "unknown error"), vim.log.levels.ERROR)
-                    M.close()
+                    M.close("error_event")
                 elseif ev.event == "time" and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
                     local status = ev.playing and "playing" or "paused"
                     local pos = fmt_time(ev.position)
@@ -125,7 +139,7 @@ end
 
 local function set_image_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
-    vim.keymap.set("n", "q",   function() M.close() end, o)
+    vim.keymap.set("n", "q",   function() M.close("keymap_q_image") end, o)
     vim.keymap.set("n", "+",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
     vim.keymap.set("n", "-",   function() send({ cmd = "zoom", factor = 0.8  }) end, o)
     vim.keymap.set("n", "=",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
@@ -142,7 +156,7 @@ end
 
 local function set_video_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
-    vim.keymap.set("n", "q",        function() M.close() end, o)
+    vim.keymap.set("n", "q",        function() M.close("keymap_q_video") end, o)
     vim.keymap.set("n", "p",        function() send({ cmd = "play_pause" }) end, o)
     vim.keymap.set("n", "<Space>",  function() send({ cmd = "play_pause" }) end, o)
     vim.keymap.set("n", "h",        function() send({ cmd = "seek", delta = -1  }) end, o)
@@ -161,6 +175,7 @@ end
 
 function M.open(path)
     path = vim.fn.expand(path)
+    dbg("M.open path=" .. tostring(path))
     if vim.fn.filereadable(path) == 0 then
         vim.notify("nvim-gfx: file not readable: " .. path, vim.log.levels.ERROR)
         return
@@ -172,28 +187,46 @@ function M.open(path)
         return
     end
 
-    if state.job_id then M.close() end
+    if state.job_id then
+        if state.path == path then
+            -- NvimTree's open_in_new_window fires BufReadPost twice for a
+            -- single file open. Ignore the duplicate so we don't spawn a
+            -- second renderer that races the first on the shared image ID.
+            dbg("M.open: duplicate open of same path, ignoring")
+            return
+        end
+        M.close("open_reopen")
+    end
 
     state.winid      = vim.api.nvim_get_current_win()
     state.orig_bufnr = vim.api.nvim_get_current_buf()
     state.path       = path
 
-    local bufnr = vim.api.nvim_create_buf(false, true)
+    local bufnr = vim.api.nvim_create_buf(false, false)
     state.bufnr = bufnr
     vim.api.nvim_win_set_buf(state.winid, bufnr)
     vim.bo[bufnr].bufhidden  = "wipe"
     vim.bo[bufnr].filetype   = "nvim-gfx"
     vim.bo[bufnr].modifiable = false
+    vim.bo[bufnr].swapfile   = false
     vim.wo[state.winid].number = false
     vim.wo[state.winid].relativenumber = false
     vim.wo[state.winid].signcolumn = "no"
 
-    -- Wipe the original image buffer immediately so no other plugin can find
-    -- and load the raw binary content into any window.
-    local orig_name = vim.api.nvim_buf_get_name(state.orig_bufnr)
-    if orig_name ~= "" and orig_name:match("%.(png|jpg|jpeg|webp|mp4|mkv|webm|avi|mov|m4v)$") then
-        pcall(vim.api.nvim_buf_delete, state.orig_bufnr, { force = true })
-        state.orig_bufnr = nil
+    -- Wipe any buffer Neovim/NvimTree loaded with the raw image bytes, matched
+    -- by filename. (BufReadPost runs after Neovim has read the file into some
+    -- buffer; that buffer isn't necessarily the one we captured as orig_bufnr.)
+    -- Removing it stops the raw bytes resurfacing as text and forces a fresh
+    -- BufReadPost on reopen instead of NvimTree showing the stale buffer.
+    local target = vim.fn.fnamemodify(path, ":p")
+    for _, b in ipairs(vim.api.nvim_list_bufs()) do
+        if b ~= bufnr then
+            local bname = vim.api.nvim_buf_get_name(b)
+            if bname ~= "" and vim.fn.fnamemodify(bname, ":p") == target then
+                if b == state.orig_bufnr then state.orig_bufnr = nil end
+                pcall(vim.api.nvim_buf_delete, b, { force = true })
+            end
+        end
     end
 
     if is_video(path) then
@@ -225,7 +258,8 @@ function M.open(path)
     local function on_resize()
         if not state.job_id then return end
         if not vim.api.nvim_win_is_valid(state.winid) then
-            vim.schedule(function() M.close() end)
+            dbg("on_resize: winid " .. tostring(state.winid) .. " INVALID -> close")
+            vim.schedule(function() M.close("on_resize_invalid_win") end)
             return
         end
         local g = geometry.win_geometry(state.winid)
@@ -242,9 +276,39 @@ function M.open(path)
     vim.api.nvim_create_autocmd("WinEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("BufEnter",    { group = state.aug_id, callback = schedule_redraw })
     vim.api.nvim_create_autocmd("ModeChanged", { group = state.aug_id, callback = schedule_redraw })
+    dbg("open: bufnr=" .. bufnr .. " winid=" .. state.winid)
+    -- The viewer buffer left its window (window closed, or a buffer replaced it
+    -- in-place). bufhidden=wipe means this fires as the buffer is wiped. Tear
+    -- down the renderer; do NOT block here (jobstop is scheduled).
+    vim.api.nvim_create_autocmd("BufWipeout", {
+        group    = state.aug_id,
+        buffer   = bufnr,
+        callback = function()
+            dbg("BufWipeout fired, job_id=" .. tostring(state.job_id))
+            if state.redraw_timer then
+                vim.loop.timer_stop(state.redraw_timer)
+                state.redraw_timer:close()
+                state.redraw_timer = nil
+            end
+            local jid = state.job_id
+            if jid then
+                state.job_id = nil
+                vim.fn.chansend(jid, vim.json.encode({ cmd = "quit" }) .. "\n")
+                vim.schedule(function() pcall(vim.fn.jobstop, jid) end)
+            end
+        end,
+    })
+    vim.api.nvim_create_autocmd("BufEnter", {
+        group    = state.aug_id,
+        buffer   = bufnr,
+        callback = function()
+            if state.job_id then schedule_redraw() end
+        end,
+    })
 end
 
-function M.close()
+function M.close(reason)
+    dbg("M.close called, reason=" .. tostring(reason) .. " job_id=" .. tostring(state.job_id))
     local jid = state.job_id
     if jid then
         state.job_id = nil
@@ -252,7 +316,40 @@ function M.close()
         vim.fn.jobwait({ jid }, 200)
         pcall(vim.fn.jobstop, jid)
     end
+
+    local winid = state.winid
+    local bufnr = state.bufnr
+    local orig_bufnr = state.orig_bufnr
+
     cleanup()
+
+    if winid and vim.api.nvim_win_is_valid(winid) then
+        if orig_bufnr and vim.api.nvim_buf_is_valid(orig_bufnr) then
+            vim.api.nvim_win_set_buf(winid, orig_bufnr)
+        else
+            pcall(vim.api.nvim_win_set_buf, winid, vim.api.nvim_create_buf(true, true))
+        end
+    end
+
+    if bufnr and vim.api.nvim_buf_is_valid(bufnr) then
+        pcall(vim.api.nvim_buf_delete, bufnr, { force = true })
+    end
+end
+
+-- Dedicated-viewer behavior: opening any other real file closes the image.
+-- Called from a global BufWinEnter autocmd. Focusing the sidebar or another
+-- window does NOT trigger this (BufWinEnter fires on display, not focus), and
+-- special buffers (NvimTree, prompts, [No Name]) and media files are ignored.
+function M.on_other_buf(bufnr)
+    if not state.job_id then return end
+    if bufnr == state.bufnr then return end
+    if not (bufnr and vim.api.nvim_buf_is_valid(bufnr)) then return end
+    if vim.bo[bufnr].buftype ~= "" then return end
+    local name = vim.api.nvim_buf_get_name(bufnr)
+    if name == "" then return end
+    if is_media(name) then return end       -- media opens are handled by M.open
+    dbg("on_other_buf: foreign file " .. name .. " -> close viewer")
+    vim.schedule(function() M.close("other_file_opened") end)
 end
 
 return M

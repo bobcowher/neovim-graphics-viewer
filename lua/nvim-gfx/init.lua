@@ -36,6 +36,12 @@ function M.setup(_opts)
         callback = function(ev) viewer.open(ev.file) end,
         desc     = "Auto-preview image and video files with nvim-gfx",
     })
+
+    -- Dedicated-viewer behavior: opening any other real file closes the image.
+    vim.api.nvim_create_autocmd("BufWinEnter", {
+        callback = function(ev) viewer.on_other_buf(ev.buf) end,
+        desc     = "Close nvim-gfx viewer when navigating to another file",
+    })
 end
 
 return M
