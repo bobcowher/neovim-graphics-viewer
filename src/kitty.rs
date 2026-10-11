@@ -90,6 +90,21 @@ impl KittyRenderer {
         }
     }
 
+    /// Display a frame exactly as given, bypassing zoom/pan. For callers that
+    /// compose their own view (PDF pages).
+    pub fn display_raw(
+        &mut self,
+        pixels: &[u8],
+        src_w: u32,
+        src_h: u32,
+        col: u32,
+        row: u32,
+        dest_cols: u32,
+        dest_rows: u32,
+    ) -> Result<(), String> {
+        write_kitty(&mut *self.writer, pixels, src_w, src_h, col, row, dest_cols, dest_rows)
+    }
+
     pub fn clear(&mut self) -> Result<(), String> {
         write_terminal_line(&mut *self.writer, format!("\x1b_Ga=d,d=i,i={KITTY_IMAGE_ID}\x1b\\").as_bytes())
     }
@@ -118,6 +133,20 @@ impl KittyRenderer {
         }
         (visible_w, visible_h, out)
     }
+}
+
+/// Terminal cell size in pixels, from TIOCGWINSZ on NVIM_GFX_TTY. None if the
+/// TTY is unavailable or the terminal doesn't report pixel dimensions.
+pub fn cell_size_px() -> Option<(f32, f32)> {
+    use std::os::fd::AsRawFd;
+    let path = std::env::var("NVIM_GFX_TTY").ok()?;
+    let tty = File::open(path).ok()?;
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    let rc = unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ, &mut ws) };
+    if rc != 0 || ws.ws_col == 0 || ws.ws_row == 0 || ws.ws_xpixel == 0 || ws.ws_ypixel == 0 {
+        return None;
+    }
+    Some((ws.ws_xpixel as f32 / ws.ws_col as f32, ws.ws_ypixel as f32 / ws.ws_row as f32))
 }
 
 fn write_terminal_line(writer: &mut dyn Write, seq: &[u8]) -> Result<(), String> {

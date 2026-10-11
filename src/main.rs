@@ -1,4 +1,5 @@
 mod kitty;
+mod pdf;
 mod protocol;
 mod video;
 
@@ -7,6 +8,7 @@ use std::sync::mpsc::{self, TryRecvError};
 use std::time::{Duration, Instant};
 
 use kitty::KittyRenderer;
+use pdf::{PdfDoc, PdfView};
 use protocol::{Command, Event};
 use video::VideoDecoder;
 
@@ -17,6 +19,20 @@ fn is_video_path(path: &str) -> bool {
         .unwrap_or("")
         .to_lowercase();
     matches!(ext.as_str(), "mp4" | "mkv" | "webm" | "avi" | "mov" | "m4v")
+}
+
+fn is_pdf_path(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("pdf"))
+}
+
+/// Viewport in pixels for a window of `cols`x`rows` cells. Falls back to a
+/// 1:2 cell when the terminal doesn't report pixel sizes.
+fn pdf_viewport(cols: u32, rows: u32) -> (u32, u32) {
+    let (cw, ch) = kitty::cell_size_px().unwrap_or((8.0, 16.0));
+    pdf::viewport_px(cols, rows, cw, ch)
 }
 
 fn emit(event: Event) {
@@ -50,6 +66,11 @@ struct VideoState {
     last_time_emit: Instant,
 }
 
+struct PdfState {
+    doc: PdfDoc,
+    view: PdfView,
+}
+
 struct App {
     kitty: KittyRenderer,
     col: u32,
@@ -58,6 +79,7 @@ struct App {
     height: u32,
     image: Option<image::DynamicImage>,
     video: Option<VideoState>,
+    pdf: Option<PdfState>,
     current_path: Option<String>,
     last_rgba: Option<(Vec<u8>, u32, u32)>,
     last_display_w: u32,
@@ -74,6 +96,7 @@ impl App {
             height: 0,
             image: None,
             video: None,
+            pdf: None,
             current_path: None,
             last_rgba: None,
             last_display_w: 0,
@@ -102,6 +125,7 @@ impl App {
                             last_time_emit: Instant::now(),
                         });
                         self.image = None;
+                        self.pdf = None;
                         self.last_rgba = None;
                         self.kitty.reset();
                         emit(Event::Ready);
@@ -111,6 +135,25 @@ impl App {
                     }
                     self.last_display_w = width;
                     self.last_display_h = height;
+                } else if is_pdf_path(&path) {
+                    if need_open {
+                        let doc = PdfDoc::open(&path)?;
+                        self.current_path = Some(path);
+                        self.pdf = Some(PdfState { doc, view: PdfView::default() });
+                        self.image = None;
+                        self.video = None;
+                        self.last_rgba = None;
+                    }
+                    if !need_open && (width != self.last_display_w || height != self.last_display_h) {
+                        self.kitty.clear()?;
+                    }
+                    self.last_display_w = width;
+                    self.last_display_h = height;
+                    self.display_pdf()?;
+                    emit(Event::Ready);
+                    if need_open {
+                        self.emit_page();
+                    }
                 } else {
                     if need_open {
                         let img = image::open(&path)
@@ -118,6 +161,7 @@ impl App {
                         self.current_path = Some(path);
                         self.image = Some(img);
                         self.video = None;
+                        self.pdf = None;
                         self.kitty.reset();
                     }
                     if !need_open && (width != self.last_display_w || height != self.last_display_h) {
@@ -131,16 +175,41 @@ impl App {
                 Ok(false)
             }
             Command::Zoom { factor } => {
+                if let Some(ps) = self.pdf.as_mut() {
+                    ps.view.zoom_by(factor);
+                    self.display_pdf()?;
+                    return Ok(false);
+                }
                 self.kitty.zoom_by(factor);
                 self.display_image()?;
                 Ok(false)
             }
             Command::Reset => {
+                if let Some(ps) = self.pdf.as_mut() {
+                    ps.view = PdfView::default();
+                    self.display_pdf()?;
+                    return Ok(false);
+                }
                 self.kitty.reset();
                 self.display_image()?;
                 Ok(false)
             }
             Command::Pan { dx, dy } => {
+                if let Some(ps) = self.pdf.as_mut() {
+                    let (vw, vh) = pdf_viewport(self.width, self.height);
+                    let (pw, ph) = ps.doc.current_image()?.dimensions();
+                    let moved = ps.view.scroll(dx, dy, pw, ph, vw, vh);
+                    // Scrolling past the bottom continues onto the next page's
+                    // top; past the top, onto the previous page's bottom.
+                    if !moved && dy != 0 && ps.doc.step(dy.signum()) {
+                        ps.view.y = if dy > 0 { 0.0 } else { 1.0 };
+                        self.display_pdf()?;
+                        self.emit_page();
+                        return Ok(false);
+                    }
+                    self.display_pdf()?;
+                    return Ok(false);
+                }
                 self.kitty.pan(dx, dy);
                 self.display_image()?;
                 Ok(false)
@@ -166,6 +235,16 @@ impl App {
                 }
                 Ok(false)
             }
+            Command::Page { delta } => {
+                let changed = self.pdf.as_mut().is_some_and(|ps| ps.doc.step(delta));
+                if changed { self.on_page_changed()?; }
+                Ok(false)
+            }
+            Command::PageGoto { page } => {
+                let changed = self.pdf.as_mut().is_some_and(|ps| ps.doc.goto(page));
+                if changed { self.on_page_changed()?; }
+                Ok(false)
+            }
             Command::Clear => {
                 self.kitty.clear()?;
                 Ok(false)
@@ -175,6 +254,29 @@ impl App {
                 Ok(true)
             }
         }
+    }
+
+    /// New page starts at the top; zoom and horizontal position carry over.
+    fn on_page_changed(&mut self) -> Result<(), String> {
+        if let Some(ps) = self.pdf.as_mut() {
+            ps.view.y = 0.0;
+        }
+        self.display_pdf()?;
+        self.emit_page();
+        Ok(())
+    }
+
+    fn emit_page(&self) {
+        if let Some(ps) = self.pdf.as_ref() {
+            emit(Event::Page { page: ps.doc.page, count: ps.doc.page_count });
+        }
+    }
+
+    fn display_pdf(&mut self) -> Result<(), String> {
+        let Some(ps) = self.pdf.as_mut() else { return Ok(()) };
+        let (vw, vh) = pdf_viewport(self.width, self.height);
+        let frame = pdf::compose(ps.doc.current_image()?, &ps.view, vw, vh);
+        self.kitty.display_raw(frame.as_raw(), vw, vh, self.col, self.row, self.width, self.height)
     }
 
     fn display_image(&mut self) -> Result<(), String> {

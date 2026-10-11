@@ -308,6 +308,7 @@ dependencies = [
  "base64",
  "ffmpeg-next",
  "image",
+ "libc",
  "serde",
  "serde_json",
 ]

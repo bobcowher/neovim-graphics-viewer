@@ -32,9 +32,10 @@ function M.setup(_opts)
 
     vim.api.nvim_create_autocmd("BufReadPost", {
         pattern  = { "*.png", "*.jpg", "*.jpeg", "*.webp",
-                     "*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.m4v" },
+                     "*.mp4", "*.mkv", "*.webm", "*.avi", "*.mov", "*.m4v",
+                     "*.pdf" },
         callback = function(ev) viewer.open(ev.file) end,
-        desc     = "Auto-preview image and video files with nvim-gfx",
+        desc     = "Auto-preview image, video and PDF files with nvim-gfx",
     })
 
     -- Dedicated-viewer behavior: opening any other real file closes the image.

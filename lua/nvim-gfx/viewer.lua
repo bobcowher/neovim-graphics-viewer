@@ -4,6 +4,7 @@ local M = {}
 
 local VIDEO_EXTS = { mp4=true, mkv=true, webm=true, avi=true, mov=true, m4v=true }
 local IMAGE_EXTS = { png=true, jpg=true, jpeg=true, webp=true, gif=true, bmp=true }
+local PDF_EXTS   = { pdf=true }
 
 local state = {
     job_id       = nil,
@@ -24,11 +25,16 @@ local function is_video(path)
     return ext ~= nil and VIDEO_EXTS[ext:lower()] == true
 end
 
+local function is_pdf(path)
+    local ext = path:match("%.(%w+)$")
+    return ext ~= nil and PDF_EXTS[ext:lower()] == true
+end
+
 local function is_media(path)
     local ext = path:match("%.(%w+)$")
     if not ext then return false end
     ext = ext:lower()
-    return IMAGE_EXTS[ext] == true or VIDEO_EXTS[ext] == true
+    return IMAGE_EXTS[ext] == true or VIDEO_EXTS[ext] == true or PDF_EXTS[ext] == true
 end
 
 function M.is_active()
@@ -115,6 +121,9 @@ local function on_stdout(_, data, _)
                     local pos = fmt_time(ev.position)
                     local dur = (ev.duration or 0) > 0 and fmt_time(ev.duration) or "--:--"
                     pcall(vim.api.nvim_buf_set_name, state.bufnr, status .. " " .. pos .. " / " .. dur)
+                elseif ev.event == "page" and state.bufnr and vim.api.nvim_buf_is_valid(state.bufnr) then
+                    pcall(vim.api.nvim_buf_set_name, state.bufnr,
+                          string.format("page %d / %d", ev.page or 0, ev.count or 0))
                 end
             end
         end
@@ -139,6 +148,29 @@ end
 local function set_image_keymaps(bufnr)
     local o = { noremap = true, silent = true, buffer = bufnr }
     vim.keymap.set("n", "q",   function() M.close("keymap_q_image") end, o)
+    vim.keymap.set("n", "+",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "-",   function() send({ cmd = "zoom", factor = 0.8  }) end, o)
+    vim.keymap.set("n", "=",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
+    vim.keymap.set("n", "r",   function() send({ cmd = "reset" }) end, o)
+    vim.keymap.set("n", "h",        function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
+    vim.keymap.set("n", "<Left>",   function() send({ cmd = "pan", dx = -1, dy =  0 }) end, o)
+    vim.keymap.set("n", "l",        function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
+    vim.keymap.set("n", "<Right>",  function() send({ cmd = "pan", dx =  1, dy =  0 }) end, o)
+    vim.keymap.set("n", "k",        function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
+    vim.keymap.set("n", "<Up>",     function() send({ cmd = "pan", dx =  0, dy = -1 }) end, o)
+    vim.keymap.set("n", "j",        function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
+    vim.keymap.set("n", "<Down>",   function() send({ cmd = "pan", dx =  0, dy =  1 }) end, o)
+end
+
+local function set_pdf_keymaps(bufnr)
+    local o = { noremap = true, silent = true, buffer = bufnr }
+    vim.keymap.set("n", "q",          function() M.close("keymap_q_pdf") end, o)
+    vim.keymap.set("n", "J",          function() send({ cmd = "page", delta =  1 }) end, o)
+    vim.keymap.set("n", "<PageDown>", function() send({ cmd = "page", delta =  1 }) end, o)
+    vim.keymap.set("n", "K",          function() send({ cmd = "page", delta = -1 }) end, o)
+    vim.keymap.set("n", "<PageUp>",   function() send({ cmd = "page", delta = -1 }) end, o)
+    vim.keymap.set("n", "gg",         function() send({ cmd = "page_goto", page =  1 }) end, o)
+    vim.keymap.set("n", "G",          function() send({ cmd = "page_goto", page = -1 }) end, o)
     vim.keymap.set("n", "+",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
     vim.keymap.set("n", "-",   function() send({ cmd = "zoom", factor = 0.8  }) end, o)
     vim.keymap.set("n", "=",   function() send({ cmd = "zoom", factor = 1.25 }) end, o)
@@ -230,6 +262,8 @@ function M.open(path)
     state.playing  = state.is_video   -- the binary auto-plays on open
     if state.is_video then
         set_video_keymaps(bufnr)
+    elseif is_pdf(path) then
+        set_pdf_keymaps(bufnr)
     else
         set_image_keymaps(bufnr)
     end
@@ -365,7 +399,7 @@ function M.close(reason)
     -- On explicit quit (q), if the NvimTree sidebar is open, bounce focus to it
     -- instead of leaving the cursor in the now-empty viewer window. Other close
     -- paths (opening another file, window closed) already land focus correctly.
-    if reason == "keymap_q_image" or reason == "keymap_q_video" then
+    if reason == "keymap_q_image" or reason == "keymap_q_video" or reason == "keymap_q_pdf" then
         for _, w in ipairs(vim.api.nvim_list_wins()) do
             local wb = vim.api.nvim_win_get_buf(w)
             if vim.api.nvim_buf_is_valid(wb) and vim.bo[wb].filetype == "NvimTree" then

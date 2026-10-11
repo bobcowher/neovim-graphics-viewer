@@ -10,6 +10,8 @@ pub enum Command {
     PlayPause,
     Seek { delta: i32 },
     Rewind,
+    Page { delta: i32 },
+    PageGoto { page: i32 },
     Clear,
     Quit,
 }
@@ -19,6 +21,7 @@ pub enum Command {
 pub enum Event {
     Ready,
     Time { position: f64, duration: f64, playing: bool },
+    Page { page: u32, count: u32 },
     Error { msg: String },
 }
 
@@ -115,5 +118,29 @@ mod tests {
     fn deserialize_rewind() {
         let cmd: Command = serde_json::from_str(r#"{"cmd":"rewind"}"#).unwrap();
         assert!(matches!(cmd, Command::Rewind));
+    }
+
+    #[test]
+    fn deserialize_page() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"page","delta":-1}"#).unwrap();
+        match cmd {
+            Command::Page { delta } => assert_eq!(delta, -1),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn deserialize_page_goto() {
+        let cmd: Command = serde_json::from_str(r#"{"cmd":"page_goto","page":-1}"#).unwrap();
+        match cmd {
+            Command::PageGoto { page } => assert_eq!(page, -1),
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn serialize_page_event() {
+        let json = serde_json::to_string(&Event::Page { page: 3, count: 42 }).unwrap();
+        assert_eq!(json, r#"{"event":"page","page":3,"count":42}"#);
     }
 }
